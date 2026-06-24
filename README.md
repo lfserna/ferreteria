@@ -10,6 +10,8 @@ Aplicación Flask modular para una ferretería multi-cliente, multi-sucursal y m
 - Barra inferior fija en móvil con acción principal sobresaliente para ventas.
 - Buscador automático de productos por nombre, descripción, código interno o código de barras.
 - Vista unificada de productos y stock por ubicación.
+- CRUD administrativo de productos, categorías y marcas para administradores.
+- CRUD operativo de inventario: ajuste exacto, entrada, salida y traspaso.
 - Cantidades manejadas como unidades enteras, sin decimales.
 - Filtros automáticos sin botón de aplicar.
 - Selección por burbujas para opciones cortas, como método de pago.
@@ -18,13 +20,21 @@ Aplicación Flask modular para una ferretería multi-cliente, multi-sucursal y m
 - Pedidos enviados a caja visibles para cajeros.
 - Validación de rebaja: el precio vendido no puede bajar del precio mínimo permitido.
 - Confirmación de venta con llave de idempotencia para evitar duplicados por doble clic.
-- Registro de auditoría para login, creación de usuario, cambios de límite, envío de orden a caja y confirmación de venta.
+- Registro de auditoría para login, productos, categorías, marcas, inventario, creación de usuario, cambios de límite, envío de orden a caja y confirmación de venta.
 - Gestión de usuarios con username automático, por ejemplo Luis Serna → `lserna`.
 - Contraseña por defecto para usuarios nuevos: `hola123`.
 - Límite configurable de usuarios por cliente.
 - Comprobante imprimible y PDF de 58 mm usando template editable.
 - Base preparada para proveedores y compras opcionales.
 - Preparado para ejecución local con `flask run` o `python run.py`, y producción con Gunicorn.
+
+## Permisos operativos principales
+
+- Administrador general: administra productos, categorías, marcas, usuarios e inventario de todas las ubicaciones.
+- Administrador de tienda: administra catálogo y gestiona inventario solo de su sucursal.
+- Administrador de almacén: gestiona inventario solo desde su almacén como origen.
+- Cajero: vende y cobra; no tiene ajuste manual de inventario.
+- Vendedor: consulta catálogo/stock y arma pedidos; no descuenta stock directamente.
 
 ## Instalación
 
