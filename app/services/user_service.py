@@ -55,6 +55,26 @@ def get_user_quota(cliente_id: int):
         return row
 
 
+def update_user_limit(cliente_id: int, current_user_id: int, max_usuarios: int):
+    max_usuarios = int(max_usuarios or 0)
+    if max_usuarios <= 0:
+        raise ValueError("El límite de usuarios debe ser mayor a cero.")
+    with db_transaction() as (cursor, _connection):
+        cursor.execute(
+            "SELECT COUNT(*) AS total FROM usuarios WHERE cliente_id = %s AND deleted_at IS NULL AND estado <> 'INACTIVO'",
+            (cliente_id,),
+        )
+        total_users = int(cursor.fetchone()["total"])
+        if max_usuarios < total_users:
+            raise ValueError(f"El límite no puede ser menor a los {total_users} usuarios activos actuales.")
+        cursor.execute("SELECT max_usuarios FROM clientes WHERE id = %s FOR UPDATE", (cliente_id,))
+        previous = cursor.fetchone()
+        cursor.execute("UPDATE clientes SET max_usuarios = %s, updated_at = NOW() WHERE id = %s", (max_usuarios, cliente_id))
+        log_audit(cursor, cliente_id=cliente_id, usuario_id=current_user_id, modulo="CLIENTES",
+                  accion="ACTUALIZAR_LIMITE_USUARIOS", tabla_afectada="clientes", registro_id=cliente_id,
+                  valor_anterior=previous, valor_nuevo={"max_usuarios": max_usuarios})
+
+
 def list_users(cliente_id: int):
     with db_cursor() as cursor:
         cursor.execute(
