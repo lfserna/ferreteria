@@ -1,7 +1,10 @@
 from flask import Blueprint, flash, g, jsonify, redirect, render_template, request, url_for
+from mysql.connector.errors import IntegrityError
+
 from app.database import db_cursor, db_transaction
 from app.services.audit_service import log_audit
-from app.services.category_admin_service import estado_value
+from app.services.category_admin_service import estado_value, list_brands, list_categories_admin
+from app.services.product_admin_service import create_product
 from app.utils.permissions import can_manage_inventory, can_manage_products
 from app.utils.security import login_required
 from app.utils.serializers import to_jsonable
@@ -139,13 +142,48 @@ def index():
         flash("No hay ubicaciones de inventario asignadas a tu rol. Revisa sucursal/almacén del usuario o carga ubicaciones_stock.", "warning")
     q = request.args.get("q", "")
     location_id = request.args.get("ubicacion_id") or None
-    return render_template("inventory/index.html", rows=inventory_rows(q, location_id), can_manage=can_manage_inventory(), can_edit_catalog=can_manage_products(), productos=products(), origenes=managed_locations, destinos=client_locations, ubicaciones=client_locations, movimientos=movements(), q=q, ubicacion_id=location_id)
+    return render_template(
+        "inventory/index.html",
+        rows=inventory_rows(q, location_id),
+        can_manage=can_manage_inventory(),
+        can_edit_catalog=can_manage_products(),
+        productos=products(),
+        origenes=managed_locations,
+        destinos=client_locations,
+        ubicaciones=client_locations,
+        categorias=list_categories_admin(g.user["cliente_id"]),
+        marcas=list_brands(g.user["cliente_id"]),
+        movimientos=movements(),
+        q=q,
+        ubicacion_id=location_id,
+    )
 
 
 @inventory_bp.route("/buscar")
 @login_required
 def buscar():
     return jsonify(to_jsonable(inventory_rows(request.args.get("q", ""), request.args.get("ubicacion_id") or None)))
+
+
+@inventory_bp.route("/productos/crear", methods=["POST"])
+@login_required
+def crear_producto():
+    if not can_manage_products():
+        flash("No tienes permisos para crear productos.", "danger")
+        return redirect(url_for("inventory.index"))
+    try:
+        cantidad = qty(request.form.get("cantidad_inicial"))
+        ubicacion_id = int(request.form.get("ubicacion_stock_id") or 0)
+        allowed_managed(ubicacion_id)
+        data = request.form.copy()
+        data["cantidad_inicial"] = str(cantidad)
+        create_product(g.user["cliente_id"], g.user["id"], data)
+        flash("Producto agregado correctamente al inventario.", "success")
+    except IntegrityError:
+        flash("No se pudo guardar: uno de los códigos individuales ya existe.", "danger")
+    except ValueError as e:
+        flash(str(e), "danger")
+    return redirect(url_for("inventory.index"))
 
 
 @inventory_bp.route("/api/productos/<int:product_id>")
