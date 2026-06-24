@@ -3,13 +3,17 @@ from mysql.connector.errors import IntegrityError
 
 from app.database import db_cursor, db_transaction
 from app.services.audit_service import log_audit
-from app.services.category_admin_service import create_category, estado_value, list_brands, list_categories_admin, update_category
+from app.services.category_admin_service import create_brand, create_category, estado_value, list_brands, list_categories_admin, update_brand, update_category
 from app.services.product_admin_service import create_product
 from app.utils.permissions import can_manage_inventory, can_manage_products
 from app.utils.security import login_required
 from app.utils.serializers import to_jsonable
 
 inventory_bp = Blueprint("inventory", __name__, url_prefix="/inventario")
+
+
+def wants_json():
+    return request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.accept_mimetypes.best == "application/json"
 
 
 def qty(v):
@@ -150,22 +154,7 @@ def index():
     location_id = request.args.get("ubicacion_id") or None
     category_id = request.args.get("categoria_id") or None
     categorias = list_categories_admin(g.user["cliente_id"])
-    return render_template(
-        "inventory/index.html",
-        rows=inventory_rows(q, location_id, category_id),
-        can_manage=can_manage_inventory(),
-        can_edit_catalog=can_manage_products(),
-        productos=products(),
-        origenes=managed_locations,
-        destinos=client_locations,
-        ubicaciones=client_locations,
-        categorias=categorias,
-        marcas=list_brands(g.user["cliente_id"]),
-        movimientos=movements(),
-        q=q,
-        ubicacion_id=location_id,
-        categoria_id=category_id,
-    )
+    return render_template("inventory/index.html", rows=inventory_rows(q, location_id, category_id), can_manage=can_manage_inventory(), can_edit_catalog=can_manage_products(), productos=products(), origenes=managed_locations, destinos=client_locations, ubicaciones=client_locations, categorias=categorias, marcas=list_brands(g.user["cliente_id"]), movimientos=movements(), q=q, ubicacion_id=location_id, categoria_id=category_id)
 
 
 @inventory_bp.route("/buscar")
@@ -202,11 +191,42 @@ def editar_categoria(category_id):
     return redirect(url_for("inventory.index"))
 
 
+@inventory_bp.route("/marcas/crear", methods=["POST"])
+@login_required
+def crear_marca():
+    if not can_manage_products():
+        flash("No tienes permisos para crear marcas.", "danger")
+        return redirect(url_for("inventory.index"))
+    try:
+        create_brand(g.user["cliente_id"], g.user["id"], request.form)
+        flash("Marca creada correctamente.", "success")
+    except ValueError as e:
+        flash(str(e), "danger")
+    return redirect(url_for("inventory.index"))
+
+
+@inventory_bp.route("/marcas/<int:brand_id>/editar", methods=["POST"])
+@login_required
+def editar_marca(brand_id):
+    if not can_manage_products():
+        flash("No tienes permisos para editar marcas.", "danger")
+        return redirect(url_for("inventory.index"))
+    try:
+        update_brand(g.user["cliente_id"], g.user["id"], brand_id, request.form)
+        flash("Marca actualizada correctamente.", "success")
+    except ValueError as e:
+        flash(str(e), "danger")
+    return redirect(url_for("inventory.index"))
+
+
 @inventory_bp.route("/productos/crear", methods=["POST"])
 @login_required
 def crear_producto():
     if not can_manage_products():
-        flash("No tienes permisos para crear productos.", "danger")
+        message = "No tienes permisos para crear productos."
+        if wants_json():
+            return jsonify({"ok": False, "message": message}), 403
+        flash(message, "danger")
         return redirect(url_for("inventory.index"))
     try:
         cantidad = qty(request.form.get("cantidad_inicial"))
@@ -214,11 +234,19 @@ def crear_producto():
         allowed_managed(ubicacion_id)
         data = request.form.copy()
         data["cantidad_inicial"] = str(cantidad)
-        create_product(g.user["cliente_id"], g.user["id"], data)
-        flash("Producto agregado correctamente al inventario.", "success")
+        product_id = create_product(g.user["cliente_id"], g.user["id"], data)
+        message = "Producto agregado correctamente al inventario."
+        if wants_json():
+            return jsonify({"ok": True, "message": message, "product_id": product_id})
+        flash(message, "success")
     except IntegrityError:
-        flash("No se pudo guardar: uno de los códigos individuales ya existe.", "danger")
+        message = "No se pudo guardar: uno de los códigos individuales ya existe."
+        if wants_json():
+            return jsonify({"ok": False, "message": message}), 400
+        flash(message, "danger")
     except ValueError as e:
+        if wants_json():
+            return jsonify({"ok": False, "message": str(e)}), 400
         flash(str(e), "danger")
     return redirect(url_for("inventory.index"))
 
