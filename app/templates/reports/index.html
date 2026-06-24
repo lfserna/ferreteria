@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Reportes · Ferretería{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">Reportes</p><h1>Ventas y productos</h1></div></section>
+<section class="panel"><form class="filters-inline" method="get" data-auto-submit><label>Desde <input type="date" name="fecha_inicio" value="{{ fecha_inicio }}"></label><label>Hasta <input type="date" name="fecha_fin" value="{{ fecha_fin }}"></label></form></section>
+<section class="grid-two">
+<article class="panel"><h2>Ventas por sucursal</h2><div class="responsive-table"><table><thead><tr><th>Sucursal</th><th>Ventas</th><th>Total</th></tr></thead><tbody>{% for row in por_sucursal %}<tr><td>{{ row.sucursal or '-' }}</td><td>{{ row.ventas }}</td><td>Bs {{ '%.2f'|format(row.total) }}</td></tr>{% else %}<tr><td colspan="3">Sin datos.</td></tr>{% endfor %}</tbody></table></div></article>
+<article class="panel"><h2>Productos más vendidos</h2><div class="responsive-table"><table><thead><tr><th>Producto</th><th>Cantidad</th><th>Total</th></tr></thead><tbody>{% for row in por_producto %}<tr><td>{{ row.producto }}</td><td>{{ row.cantidad }}</td><td>Bs {{ '%.2f'|format(row.total) }}</td></tr>{% else %}<tr><td colspan="3">Sin datos.</td></tr>{% endfor %}</tbody></table></div></article>
+</section>
+{% endblock %}
