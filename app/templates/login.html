@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Ingresar · Ferretería{% endblock %}
+{% block content %}
+<section class="auth-card">
+    <div class="auth-card__brand"><span class="brand__mark">F</span><div><h1>Ingresar al sistema</h1><p>Control de ventas, stock, sucursales y almacenes.</p></div></div>
+    <form method="post" class="form-stack">
+        <label>Usuario <input type="text" name="username" value="{{ username or '' }}" autocomplete="username" required autofocus></label>
+        <label>Contraseña <input type="password" name="password" autocomplete="current-password" required></label>
+        <button class="btn btn--primary" type="submit">Entrar</button>
+    </form>
+    <p class="hint">Demo: usuario <strong>admin</strong> · contraseña <strong>Admin123!</strong></p>
+</section>
+{% endblock %}
