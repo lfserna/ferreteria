@@ -54,14 +54,34 @@ def get_product(cliente_id: int, product_id: int):
         return cursor.fetchone()
 
 
+def normalize_barcode(value: str) -> str:
+    cleaned = re.sub(r"\s+", "", (value or "").strip())
+    if cleaned.isdigit() and len(cleaned) == 13 and cleaned.startswith("0"):
+        return cleaned[1:]
+    return cleaned
+
+
+def barcode_aliases(value: str):
+    normalized = normalize_barcode(value)
+    aliases = {normalized}
+    if normalized.isdigit() and len(normalized) == 12:
+        aliases.add("0" + normalized)
+    if normalized.isdigit() and len(normalized) == 13 and normalized.startswith("0"):
+        aliases.add(normalized[1:])
+    return aliases
+
+
 def parse_codes(raw_codes: str):
-    values = [x.strip() for x in re.split(r"[\n,;]+", raw_codes or "") if x.strip()]
-    seen = set()
+    values = [normalize_barcode(x) for x in re.split(r"[\n,;]+", raw_codes or "") if normalize_barcode(x)]
+    seen = {}
     result = []
     for value in values:
-        if value in seen:
-            raise ValueError(f"Código repetido en el formulario: {value}")
-        seen.add(value)
+        aliases = barcode_aliases(value)
+        duplicate = next((seen[a] for a in aliases if a in seen), None)
+        if duplicate:
+            raise ValueError(f"Código repetido en el formulario: {value} equivale a {duplicate}")
+        for alias in aliases:
+            seen[alias] = value
         result.append(value)
     return result
 
@@ -182,21 +202,26 @@ def ensure_product_codes_table(cursor):
 def validate_unique_product_codes(cursor, cliente_id, codes):
     if not codes:
         return
-    placeholders = ",".join(["%s"] * len(codes))
-    cursor.execute(f"SELECT codigo FROM producto_codigos WHERE cliente_id=%s AND codigo IN ({placeholders}) LIMIT 1", tuple([cliente_id] + list(codes)))
+    aliases = []
+    for code in codes:
+        aliases.extend(sorted(barcode_aliases(code)))
+    aliases = sorted(set(aliases))
+    placeholders = ",".join(["%s"] * len(aliases))
+    cursor.execute(f"SELECT codigo FROM producto_codigos WHERE cliente_id=%s AND codigo IN ({placeholders}) LIMIT 1", tuple([cliente_id] + aliases))
     row = cursor.fetchone()
     if row:
-        raise ValueError(f"El código individual ya existe: {row['codigo']}")
+        raise ValueError(f"El código individual ya existe en la base: {row['codigo']}")
 
 
 def insert_product_codes(cursor, cliente_id, product_id, location_id, codes, tipo_codigo="BARRAS"):
     ensure_product_codes_table(cursor)
     estado = estado_value(cursor, "producto_codigos", "DISPONIBLE")
     for code in codes:
+        normalized = normalize_barcode(code)
         try:
-            cursor.execute("INSERT INTO producto_codigos (cliente_id,producto_id,ubicacion_stock_id,codigo,tipo_codigo,estado,created_at) VALUES (%s,%s,%s,%s,%s,%s,NOW())", (cliente_id, product_id, location_id, code, tipo_codigo, estado))
+            cursor.execute("INSERT INTO producto_codigos (cliente_id,producto_id,ubicacion_stock_id,codigo,tipo_codigo,estado,created_at) VALUES (%s,%s,%s,%s,%s,%s,NOW())", (cliente_id, product_id, location_id, normalized, tipo_codigo, estado))
         except IntegrityError:
-            raise ValueError(f"El código individual ya existe: {code}")
+            raise ValueError(f"El código individual ya existe en la base: {normalized}")
 
 
 def upsert_unit_price(cursor, cliente_id: int, product_id: int, precio_venta, precio_minimo):
