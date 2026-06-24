@@ -1,4 +1,5 @@
 from app.routes.inventory_product_create_fix import crear_producto_fixed
+from app.routes.inventory_report_routes import inventario_reporte_pdf
 from app.routes.inventory_v2_routes import inventory_bp
 
 
@@ -23,4 +24,11 @@ inventory_bp.add_url_rule(
     endpoint="crear_producto",
     view_func=crear_producto_fixed,
     methods=["POST"],
+)
+
+inventory_bp.add_url_rule(
+    "/reportes/pdf",
+    endpoint="inventario_reporte_pdf",
+    view_func=inventario_reporte_pdf,
+    methods=["GET"],
 )
