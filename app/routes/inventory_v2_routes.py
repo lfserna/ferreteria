@@ -1,7 +1,6 @@
 from flask import Blueprint, flash, g, jsonify, redirect, render_template, request, url_for
 from app.database import db_cursor, db_transaction
 from app.services.audit_service import log_audit
-from app.services.product_service import list_stock
 from app.utils.permissions import can_manage_inventory
 from app.utils.security import login_required
 from app.utils.serializers import to_jsonable
@@ -56,9 +55,41 @@ def products():
         return c.fetchall()
 
 
-def movements():
+def inventory_rows(query="", location_id=None):
+    search = f"%{query.strip()}%"
+    params = [g.user["cliente_id"], search, search, search, search]
+    location_filter = ""
+    if location_id:
+        location_filter = " AND i.ubicacion_stock_id = %s"
+        params.append(location_id)
     with db_cursor() as c:
-        c.execute("""
+        c.execute(f"""
+            SELECT p.id AS producto_id, p.nombre, p.descripcion, p.codigo_producto, p.codigo_barras,
+                   cat.nombre AS categoria, COALESCE(pr.precio_venta_estandar, 0) AS precio,
+                   COALESCE(SUM(i.cantidad_disponible), 0) AS stock_total
+            FROM productos p
+            LEFT JOIN categorias_producto cat ON cat.id=p.categoria_id
+            LEFT JOIN producto_presentaciones pp ON pp.producto_id=p.id AND pp.tipo_presentacion='UNIDAD' AND pp.estado='ACTIVO'
+            LEFT JOIN producto_precios pr ON pr.producto_presentacion_id=pp.id AND pr.estado='ACTIVO'
+            LEFT JOIN inventarios i ON i.producto_id=p.id AND i.cliente_id=p.cliente_id {location_filter}
+            WHERE p.cliente_id=%s
+              AND p.deleted_at IS NULL
+              AND (p.nombre LIKE %s OR COALESCE(p.descripcion,'') LIKE %s OR COALESCE(p.codigo_producto,'') LIKE %s OR COALESCE(p.codigo_barras,'') LIKE %s)
+            GROUP BY p.id, cat.nombre, pr.precio_venta_estandar
+            ORDER BY p.nombre
+            LIMIT 300
+        """, tuple(params))
+        return c.fetchall()
+
+
+def movements(product_id=None):
+    params = [g.user["cliente_id"]]
+    extra = ""
+    if product_id:
+        extra = " AND im.producto_id=%s"
+        params.append(product_id)
+    with db_cursor() as c:
+        c.execute(f"""
             SELECT im.id,im.tipo_movimiento,im.cantidad,im.created_at,im.observacion,
                    p.nombre AS producto, uo.nombre AS origen, ud.nombre AS destino, usr.username AS usuario
             FROM inventario_movimientos im
@@ -66,8 +97,9 @@ def movements():
             LEFT JOIN ubicaciones_stock uo ON uo.id=im.ubicacion_origen_id
             LEFT JOIN ubicaciones_stock ud ON ud.id=im.ubicacion_destino_id
             LEFT JOIN usuarios usr ON usr.id=im.usuario_id
-            WHERE im.cliente_id=%s ORDER BY im.created_at DESC, im.id DESC LIMIT 60
-        """, (g.user["cliente_id"],))
+            WHERE im.cliente_id=%s {extra}
+            ORDER BY im.created_at DESC, im.id DESC LIMIT 60
+        """, tuple(params))
         return c.fetchall()
 
 
@@ -99,13 +131,48 @@ def index():
     client_locations = locations(False)
     if can_manage_inventory() and not managed_locations:
         flash("No hay ubicaciones de inventario asignadas a tu rol. Revisa sucursal/almacén del usuario o carga ubicaciones_stock.", "warning")
-    return render_template("inventory/index.html", rows=list_stock(g.user["cliente_id"], request.args.get("q", "")), can_manage=can_manage_inventory(), productos=products(), origenes=managed_locations, destinos=client_locations, movimientos=movements())
+    q = request.args.get("q", "")
+    location_id = request.args.get("ubicacion_id") or None
+    return render_template("inventory/index.html", rows=inventory_rows(q, location_id), can_manage=can_manage_inventory(), productos=products(), origenes=managed_locations, destinos=client_locations, ubicaciones=client_locations, movimientos=movements(), q=q, ubicacion_id=location_id)
 
 
 @inventory_bp.route("/buscar")
 @login_required
 def buscar():
-    return jsonify(to_jsonable(list_stock(g.user["cliente_id"], request.args.get("q", ""))))
+    return jsonify(to_jsonable(inventory_rows(request.args.get("q", ""), request.args.get("ubicacion_id") or None)))
+
+
+@inventory_bp.route("/api/productos/<int:product_id>")
+@login_required
+def detalle_producto(product_id):
+    with db_cursor() as c:
+        c.execute("""
+            SELECT p.id,p.nombre,p.descripcion,p.codigo_producto,p.codigo_barras,cat.nombre AS categoria
+            FROM productos p LEFT JOIN categorias_producto cat ON cat.id=p.categoria_id
+            WHERE p.cliente_id=%s AND p.id=%s LIMIT 1
+        """, (g.user["cliente_id"], product_id))
+        product = c.fetchone()
+        if not product:
+            return jsonify({"error": "Producto no encontrado"}), 404
+        c.execute("""
+            SELECT pp.nombre AS presentacion, COALESCE(pr.precio_venta_estandar,0) AS precio,
+                   COALESCE(pr.precio_minimo_venta,0) AS minimo
+            FROM producto_presentaciones pp
+            LEFT JOIN producto_precios pr ON pr.producto_presentacion_id=pp.id AND pr.estado='ACTIVO'
+            WHERE pp.cliente_id=%s AND pp.producto_id=%s AND pp.estado='ACTIVO'
+            ORDER BY pp.factor_unidad_base
+        """, (g.user["cliente_id"], product_id))
+        product["presentaciones"] = c.fetchall()
+        c.execute("""
+            SELECT u.nombre AS ubicacion, u.tipo_ubicacion, COALESCE(i.cantidad_disponible,0) AS stock
+            FROM ubicaciones_stock u
+            LEFT JOIN inventarios i ON i.ubicacion_stock_id=u.id AND i.producto_id=%s AND i.cliente_id=u.cliente_id
+            WHERE u.cliente_id=%s
+            ORDER BY u.tipo_ubicacion,u.nombre
+        """, (product_id, g.user["cliente_id"]))
+        product["stock_ubicaciones"] = c.fetchall()
+        product["movimientos"] = movements(product_id)
+        return jsonify(to_jsonable(product))
 
 
 @inventory_bp.route("/ajustar", methods=["POST"])
@@ -170,12 +237,14 @@ def movimiento():
             if origin:
                 iid = inv_id(c, product_id, origin)
                 c.execute("SELECT cantidad_disponible FROM inventarios WHERE id=%s FOR UPDATE", (iid,))
-                if int(c.fetchone()["cantidad_disponible"]) < amount:
+                row = c.fetchone()
+                if int(row["cantidad_disponible"]) < amount:
                     raise ValueError("Stock insuficiente en origen.")
                 c.execute("UPDATE inventarios SET cantidad_disponible=cantidad_disponible-%s,updated_at=NOW() WHERE id=%s", (amount, iid))
             if target:
                 iid = inv_id(c, product_id, target)
                 c.execute("SELECT id FROM inventarios WHERE id=%s FOR UPDATE", (iid,))
+                c.fetchone()
                 c.execute("UPDATE inventarios SET cantidad_disponible=cantidad_disponible+%s,updated_at=NOW() WHERE id=%s", (amount, iid))
             c.execute("INSERT INTO inventario_movimientos (cliente_id,producto_id,ubicacion_origen_id,ubicacion_destino_id,tipo_movimiento,cantidad,referencia_tipo,usuario_id,observacion,created_at) VALUES (%s,%s,%s,%s,%s,%s,'MANUAL',%s,%s,NOW())", (g.user["cliente_id"], product_id, origin, target, kind, amount, g.user["id"], request.form.get("observacion") or None))
             mid = c.lastrowid
