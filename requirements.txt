@@ -3,3 +3,4 @@ mysql-connector-python
 python-dotenv
 xhtml2pdf
 gunicorn
+bcrypt
