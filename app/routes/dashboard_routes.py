@@ -1,4 +1,4 @@
-from flask import Blueprint, g, render_template
+from flask import Blueprint, g, redirect, render_template, url_for
 
 from app.database import db_cursor
 from app.utils.security import login_required
@@ -10,6 +10,8 @@ dashboard_bp = Blueprint("dashboard", __name__)
 @dashboard_bp.route("/")
 @login_required
 def index():
+    if g.user.get("rol_codigo") == "ADMIN_ALMACEN":
+        return redirect(url_for("inventory.index"))
     cliente_id = g.user["cliente_id"]
     with db_cursor() as cursor:
         cursor.execute("SELECT COUNT(*) AS total FROM productos WHERE cliente_id = %s AND estado = 'ACTIVO'", (cliente_id,))
