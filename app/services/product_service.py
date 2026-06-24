@@ -10,12 +10,20 @@ def search_products(cliente_id: int, query: str = "", limit: int = 30):
                    p.codigo_producto, p.codigo_barras, c.nombre AS categoria,
                    pp.nombre AS presentacion, pp.tipo_presentacion, pp.factor_unidad_base,
                    pr.precio_venta_estandar, pr.precio_minimo_venta,
-                   COALESCE(SUM(i.cantidad_disponible), 0) AS stock_total
+                   COALESCE(SUM(i.cantidad_disponible), 0) AS stock_total,
+                   COALESCE(
+                     GROUP_CONCAT(
+                       DISTINCT CONCAT(u.nombre, ': ', TRIM(TRAILING '.000' FROM CAST(i.cantidad_disponible AS CHAR)))
+                       ORDER BY u.tipo_ubicacion, u.nombre SEPARATOR ' | '
+                     ),
+                     'Sin stock registrado'
+                   ) AS stock_ubicaciones
             FROM productos p
             JOIN categorias_producto c ON c.id = p.categoria_id
             JOIN producto_presentaciones pp ON pp.producto_id = p.id AND pp.estado = 'ACTIVO'
             JOIN producto_precios pr ON pr.producto_presentacion_id = pp.id AND pr.estado = 'ACTIVO'
             LEFT JOIN inventarios i ON i.producto_id = p.id AND i.cliente_id = p.cliente_id
+            LEFT JOIN ubicaciones_stock u ON u.id = i.ubicacion_stock_id
             WHERE p.cliente_id = %s AND p.estado = 'ACTIVO'
               AND (p.nombre LIKE %s OR p.descripcion LIKE %s OR p.codigo_producto LIKE %s OR p.codigo_barras LIKE %s)
             GROUP BY p.id, pp.id, pr.id, c.nombre
