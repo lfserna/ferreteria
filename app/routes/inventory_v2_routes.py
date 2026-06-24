@@ -1,7 +1,7 @@
 from flask import Blueprint, flash, g, jsonify, redirect, render_template, request, url_for
 from app.database import db_cursor, db_transaction
 from app.services.audit_service import log_audit
-from app.utils.permissions import can_manage_inventory
+from app.utils.permissions import can_manage_inventory, can_manage_products
 from app.utils.security import login_required
 from app.utils.serializers import to_jsonable
 
@@ -134,7 +134,7 @@ def index():
         flash("No hay ubicaciones de inventario asignadas a tu rol. Revisa sucursal/almacén del usuario o carga ubicaciones_stock.", "warning")
     q = request.args.get("q", "")
     location_id = request.args.get("ubicacion_id") or None
-    return render_template("inventory/index.html", rows=inventory_rows(q, location_id), can_manage=can_manage_inventory(), productos=products(), origenes=managed_locations, destinos=client_locations, ubicaciones=client_locations, movimientos=movements(), q=q, ubicacion_id=location_id)
+    return render_template("inventory/index.html", rows=inventory_rows(q, location_id), can_manage=can_manage_inventory(), can_edit_catalog=can_manage_products(), productos=products(), origenes=managed_locations, destinos=client_locations, ubicaciones=client_locations, movimientos=movements(), q=q, ubicacion_id=location_id)
 
 
 @inventory_bp.route("/buscar")
@@ -156,12 +156,13 @@ def detalle_producto(product_id):
         if not product:
             return jsonify({"error": "Producto no encontrado"}), 404
         c.execute("""
-            SELECT pp.nombre AS presentacion, COALESCE(pr.precio_venta_estandar,0) AS precio,
+            SELECT pp.id AS presentacion_id, pp.nombre AS presentacion, pp.tipo_presentacion,
+                   COALESCE(pr.precio_venta_estandar,0) AS precio,
                    COALESCE(pr.precio_minimo_venta,0) AS minimo
             FROM producto_presentaciones pp
             LEFT JOIN producto_precios pr ON pr.producto_presentacion_id=pp.id AND pr.estado='ACTIVO'
             WHERE pp.cliente_id=%s AND pp.producto_id=%s AND pp.estado='ACTIVO'
-            ORDER BY pp.factor_unidad_base
+            ORDER BY CASE WHEN pp.tipo_presentacion='UNIDAD' THEN 0 ELSE 1 END, pp.factor_unidad_base
         """, (g.user["cliente_id"], product_id))
         product["presentaciones"] = c.fetchall()
         c.execute("""
@@ -172,8 +173,44 @@ def detalle_producto(product_id):
             ORDER BY u.tipo_ubicacion,u.nombre
         """, (product_id, g.user["cliente_id"]))
         product["stock_ubicaciones"] = c.fetchall()
-        product["movimientos"] = movements(product_id)
         return jsonify(to_jsonable(product))
+
+
+@inventory_bp.route("/presentacion-precio", methods=["POST"])
+@login_required
+def presentacion_precio():
+    if not can_manage_products():
+        flash("No tienes permisos para editar presentación ni precios.", "danger")
+        return redirect(url_for("inventory.index"))
+    try:
+        product_id = int(request.form.get("producto_id") or 0)
+        presentacion = (request.form.get("presentacion") or "Unidad").strip() or "Unidad"
+        precio = float(request.form.get("precio_venta_estandar") or 0)
+        minimo = float(request.form.get("precio_minimo_venta") or 0)
+        if precio <= 0:
+            raise ValueError("El precio debe ser mayor a cero.")
+        if minimo < 0 or minimo > precio:
+            raise ValueError("El precio mínimo debe ser mayor o igual a cero y no puede superar el precio.")
+        with db_transaction() as (c, _):
+            c.execute("SELECT id,nombre FROM productos WHERE cliente_id=%s AND id=%s FOR UPDATE", (g.user["cliente_id"], product_id))
+            product = c.fetchone()
+            if not product:
+                raise ValueError("Producto no encontrado.")
+            c.execute("SELECT * FROM producto_presentaciones WHERE cliente_id=%s AND producto_id=%s AND tipo_presentacion='UNIDAD' LIMIT 1", (g.user["cliente_id"], product_id))
+            previous_presentation = c.fetchone()
+            if previous_presentation:
+                presentation_id = previous_presentation["id"]
+                c.execute("UPDATE producto_presentaciones SET nombre=%s,factor_unidad_base=1,estado='ACTIVO',updated_at=NOW() WHERE id=%s", (presentacion, presentation_id))
+            else:
+                c.execute("INSERT INTO producto_presentaciones (cliente_id,producto_id,tipo_presentacion,nombre,factor_unidad_base,estado,created_at,updated_at) VALUES (%s,%s,'UNIDAD',%s,1,'ACTIVO',NOW(),NOW())", (g.user["cliente_id"], product_id, presentacion))
+                presentation_id = c.lastrowid
+            c.execute("UPDATE producto_precios SET estado='INACTIVO',updated_at=NOW() WHERE cliente_id=%s AND producto_presentacion_id=%s AND estado='ACTIVO'", (g.user["cliente_id"], presentation_id))
+            c.execute("INSERT INTO producto_precios (cliente_id,producto_id,producto_presentacion_id,precio_venta_estandar,precio_minimo_venta,moneda,vigente_desde,estado,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,'BOB',NOW(),'ACTIVO',NOW(),NOW())", (g.user["cliente_id"], product_id, presentation_id, precio, minimo))
+            log_audit(c, cliente_id=g.user["cliente_id"], usuario_id=g.user["id"], modulo="CATALOGO", accion="EDITAR_PRESENTACION_PRECIO", tabla_afectada="producto_precios", registro_id=presentation_id, valor_anterior=previous_presentation, valor_nuevo={"producto_id": product_id, "presentacion": presentacion, "precio": precio, "minimo": minimo})
+        flash("Presentación y precio actualizados correctamente.", "success")
+    except ValueError as e:
+        flash(str(e), "danger")
+    return redirect(url_for("inventory.index"))
 
 
 @inventory_bp.route("/ajustar", methods=["POST"])
