@@ -3,7 +3,7 @@ from mysql.connector.errors import IntegrityError
 
 from app.database import db_cursor, db_transaction
 from app.services.audit_service import log_audit
-from app.services.category_admin_service import estado_value, list_brands, list_categories_admin
+from app.services.category_admin_service import create_category, estado_value, list_brands, list_categories_admin, update_category
 from app.services.product_admin_service import create_product
 from app.utils.permissions import can_manage_inventory, can_manage_products
 from app.utils.security import login_required
@@ -59,14 +59,19 @@ def products():
         return c.fetchall()
 
 
-def inventory_rows(query="", location_id=None):
+def inventory_rows(query="", location_id=None, category_id=None):
     search = f"%{query.strip()}%"
     location_filter = ""
+    category_filter = ""
     params = []
     if location_id:
         location_filter = " AND i.ubicacion_stock_id = %s"
         params.append(location_id)
-    params.extend([g.user["cliente_id"], search, search, search, search])
+    params.append(g.user["cliente_id"])
+    if category_id:
+        category_filter = " AND p.categoria_id = %s"
+        params.append(category_id)
+    params.extend([search, search, search, search])
     with db_cursor() as c:
         c.execute(f"""
             SELECT p.id AS producto_id, p.nombre, p.descripcion, p.codigo_producto, p.codigo_barras,
@@ -83,6 +88,7 @@ def inventory_rows(query="", location_id=None):
             LEFT JOIN inventarios i ON i.producto_id=p.id AND i.cliente_id=p.cliente_id {location_filter}
             WHERE p.cliente_id=%s
               AND p.deleted_at IS NULL
+              {category_filter}
               AND (p.nombre LIKE %s OR COALESCE(p.descripcion,'') LIKE %s OR COALESCE(p.codigo_producto,'') LIKE %s OR COALESCE(p.codigo_barras,'') LIKE %s)
             GROUP BY p.id, cat.nombre, pr.precio_venta_estandar
             ORDER BY p.nombre
@@ -142,27 +148,58 @@ def index():
         flash("No hay ubicaciones de inventario asignadas a tu rol. Revisa sucursal/almacén del usuario o carga ubicaciones_stock.", "warning")
     q = request.args.get("q", "")
     location_id = request.args.get("ubicacion_id") or None
+    category_id = request.args.get("categoria_id") or None
+    categorias = list_categories_admin(g.user["cliente_id"])
     return render_template(
         "inventory/index.html",
-        rows=inventory_rows(q, location_id),
+        rows=inventory_rows(q, location_id, category_id),
         can_manage=can_manage_inventory(),
         can_edit_catalog=can_manage_products(),
         productos=products(),
         origenes=managed_locations,
         destinos=client_locations,
         ubicaciones=client_locations,
-        categorias=list_categories_admin(g.user["cliente_id"]),
+        categorias=categorias,
         marcas=list_brands(g.user["cliente_id"]),
         movimientos=movements(),
         q=q,
         ubicacion_id=location_id,
+        categoria_id=category_id,
     )
 
 
 @inventory_bp.route("/buscar")
 @login_required
 def buscar():
-    return jsonify(to_jsonable(inventory_rows(request.args.get("q", ""), request.args.get("ubicacion_id") or None)))
+    return jsonify(to_jsonable(inventory_rows(request.args.get("q", ""), request.args.get("ubicacion_id") or None, request.args.get("categoria_id") or None)))
+
+
+@inventory_bp.route("/categorias/crear", methods=["POST"])
+@login_required
+def crear_categoria():
+    if not can_manage_products():
+        flash("No tienes permisos para crear categorías.", "danger")
+        return redirect(url_for("inventory.index"))
+    try:
+        create_category(g.user["cliente_id"], g.user["id"], request.form)
+        flash("Categoría creada correctamente.", "success")
+    except ValueError as e:
+        flash(str(e), "danger")
+    return redirect(url_for("inventory.index"))
+
+
+@inventory_bp.route("/categorias/<int:category_id>/editar", methods=["POST"])
+@login_required
+def editar_categoria(category_id):
+    if not can_manage_products():
+        flash("No tienes permisos para editar categorías.", "danger")
+        return redirect(url_for("inventory.index"))
+    try:
+        update_category(g.user["cliente_id"], g.user["id"], category_id, request.form)
+        flash("Categoría actualizada correctamente.", "success")
+    except ValueError as e:
+        flash(str(e), "danger")
+    return redirect(url_for("inventory.index"))
 
 
 @inventory_bp.route("/productos/crear", methods=["POST"])
