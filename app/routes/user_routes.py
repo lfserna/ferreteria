@@ -1,6 +1,13 @@
 from flask import Blueprint, flash, g, redirect, render_template, request, url_for
 
-from app.services.user_service import DEFAULT_USER_PASSWORD, create_user, get_form_options, get_user_quota, list_users
+from app.services.user_service import (
+    DEFAULT_USER_PASSWORD,
+    create_user,
+    get_form_options,
+    get_user_quota,
+    list_users,
+    update_user_limit,
+)
 from app.utils.security import login_required
 
 
@@ -33,6 +40,20 @@ def crear():
     try:
         result = create_user(g.user["cliente_id"], g.user["id"], request.form)
         flash(f"Usuario creado: {result['username']}. Contraseña por defecto: {result['default_password']}", "success")
+    except ValueError as exc:
+        flash(str(exc), "danger")
+    return redirect(url_for("users.index"))
+
+
+@users_bp.route("/limite", methods=["POST"])
+@login_required
+def actualizar_limite():
+    if not can_manage_users():
+        flash("No tienes permisos para gestionar usuarios.", "danger")
+        return redirect(url_for("dashboard.index"))
+    try:
+        update_user_limit(g.user["cliente_id"], g.user["id"], request.form.get("max_usuarios"))
+        flash("Límite de usuarios actualizado correctamente.", "success")
     except ValueError as exc:
         flash(str(exc), "danger")
     return redirect(url_for("users.index"))
