@@ -57,11 +57,12 @@ def products():
 
 def inventory_rows(query="", location_id=None):
     search = f"%{query.strip()}%"
-    params = [g.user["cliente_id"], search, search, search, search]
     location_filter = ""
+    params = []
     if location_id:
         location_filter = " AND i.ubicacion_stock_id = %s"
         params.append(location_id)
+    params.extend([g.user["cliente_id"], search, search, search, search])
     with db_cursor() as c:
         c.execute(f"""
             SELECT p.id AS producto_id, p.nombre, p.descripcion, p.codigo_producto, p.codigo_barras,
