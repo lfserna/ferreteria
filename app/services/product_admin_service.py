@@ -66,6 +66,11 @@ def parse_codes(raw_codes: str):
     return result
 
 
+def code_type(data: dict):
+    value = (data.get("tipo_codigo_individual") or "BARRAS").strip().upper()
+    return value if value in {"INTERNO", "BARRAS", "SERIE"} else "BARRAS"
+
+
 def create_product(cliente_id: int, user_id: int, data: dict):
     nombre = (data.get("nombre") or "").strip()
     codigo = (data.get("codigo_producto") or "").strip() or None
@@ -75,6 +80,7 @@ def create_product(cliente_id: int, user_id: int, data: dict):
     codes = parse_codes(data.get("codigos_individuales") or "")
     initial_qty = int(data.get("cantidad_inicial") or 0)
     location_id = int(data.get("ubicacion_stock_id") or 0) or None
+    tipo_codigo = code_type(data)
     if codes and initial_qty and len(codes) > initial_qty:
         raise ValueError("No puedes registrar más códigos individuales que cantidad inicial.")
     if initial_qty and not location_id:
@@ -101,8 +107,8 @@ def create_product(cliente_id: int, user_id: int, data: dict):
         if initial_qty:
             add_initial_stock(cursor, cliente_id, product_id, location_id, initial_qty, user_id)
         if codes:
-            insert_product_codes(cursor, cliente_id, product_id, location_id, codes)
-        log_audit(cursor, cliente_id=cliente_id, usuario_id=user_id, modulo="CATALOGO", accion="CREAR_PRODUCTO", tabla_afectada="productos", registro_id=product_id, valor_nuevo={"nombre": nombre, "codigo": codigo, "cantidad_inicial": initial_qty, "codigos": len(codes)})
+            insert_product_codes(cursor, cliente_id, product_id, location_id, codes, tipo_codigo)
+        log_audit(cursor, cliente_id=cliente_id, usuario_id=user_id, modulo="CATALOGO", accion="CREAR_PRODUCTO", tabla_afectada="productos", registro_id=product_id, valor_nuevo={"nombre": nombre, "codigo": codigo, "cantidad_inicial": initial_qty, "codigos": len(codes), "tipo_codigo": tipo_codigo})
         return product_id
 
 
@@ -135,7 +141,7 @@ def update_product(cliente_id: int, user_id: int, product_id: int, data: dict):
         if codes:
             ensure_product_codes_table(cursor)
             validate_unique_product_codes(cursor, cliente_id, codes)
-            insert_product_codes(cursor, cliente_id, product_id, None, codes)
+            insert_product_codes(cursor, cliente_id, product_id, None, codes, code_type(data))
         log_audit(cursor, cliente_id=cliente_id, usuario_id=user_id, modulo="CATALOGO", accion="EDITAR_PRODUCTO", tabla_afectada="productos", registro_id=product_id, valor_anterior=previous, valor_nuevo={"nombre": nombre, "estado": estado, "codigos_agregados": len(codes)})
 
 
@@ -183,12 +189,12 @@ def validate_unique_product_codes(cursor, cliente_id, codes):
         raise ValueError(f"El código individual ya existe: {row['codigo']}")
 
 
-def insert_product_codes(cursor, cliente_id, product_id, location_id, codes):
+def insert_product_codes(cursor, cliente_id, product_id, location_id, codes, tipo_codigo="BARRAS"):
     ensure_product_codes_table(cursor)
     estado = estado_value(cursor, "producto_codigos", "DISPONIBLE")
     for code in codes:
         try:
-            cursor.execute("INSERT INTO producto_codigos (cliente_id,producto_id,ubicacion_stock_id,codigo,tipo_codigo,estado,created_at) VALUES (%s,%s,%s,%s,'INTERNO',%s,NOW())", (cliente_id, product_id, location_id, code, estado))
+            cursor.execute("INSERT INTO producto_codigos (cliente_id,producto_id,ubicacion_stock_id,codigo,tipo_codigo,estado,created_at) VALUES (%s,%s,%s,%s,%s,%s,NOW())", (cliente_id, product_id, location_id, code, tipo_codigo, estado))
         except IntegrityError:
             raise ValueError(f"El código individual ya existe: {code}")
 
