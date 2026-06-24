@@ -16,9 +16,11 @@ def qty(v):
     return n
 
 
-def locations(managed=False):
-    sql = "SELECT id,nombre,tipo_ubicacion FROM ubicaciones_stock WHERE cliente_id=%s AND estado='ACTIVO'"
+def location_where(managed=False, strict_active=True):
+    sql = "SELECT id,nombre,tipo_ubicacion FROM ubicaciones_stock WHERE cliente_id=%s"
     params = [g.user["cliente_id"]]
+    if strict_active:
+        sql += " AND estado='ACTIVO'"
     if managed:
         role = g.user["rol_codigo"]
         if role == "ADMIN_TIENDA":
@@ -29,14 +31,28 @@ def locations(managed=False):
             params.append(g.user.get("almacen_id"))
         elif role != "ADMIN_GENERAL_NEGOCIO":
             sql += " AND 1=0"
+    return sql + " ORDER BY tipo_ubicacion,nombre", tuple(params)
+
+
+def locations(managed=False):
     with db_cursor() as c:
-        c.execute(sql + " ORDER BY tipo_ubicacion,nombre", tuple(params))
+        sql, params = location_where(managed=managed, strict_active=True)
+        c.execute(sql, params)
+        rows = c.fetchall()
+        if rows:
+            return rows
+        sql, params = location_where(managed=managed, strict_active=False)
+        c.execute(sql, params)
         return c.fetchall()
 
 
 def products():
     with db_cursor() as c:
         c.execute("SELECT id,nombre,codigo_producto FROM productos WHERE cliente_id=%s AND estado='ACTIVO' ORDER BY nombre", (g.user["cliente_id"],))
+        rows = c.fetchall()
+        if rows:
+            return rows
+        c.execute("SELECT id,nombre,codigo_producto FROM productos WHERE cliente_id=%s ORDER BY nombre", (g.user["cliente_id"],))
         return c.fetchall()
 
 
@@ -79,7 +95,11 @@ def inv_id(c, product_id, location_id):
 @inventory_bp.route("")
 @login_required
 def index():
-    return render_template("inventory/index.html", rows=list_stock(g.user["cliente_id"], request.args.get("q", "")), can_manage=can_manage_inventory(), productos=products(), origenes=locations(True), destinos=locations(False), movimientos=movements())
+    managed_locations = locations(True)
+    client_locations = locations(False)
+    if can_manage_inventory() and not managed_locations:
+        flash("No hay ubicaciones de inventario asignadas a tu rol. Revisa sucursal/almacén del usuario o carga ubicaciones_stock.", "warning")
+    return render_template("inventory/index.html", rows=list_stock(g.user["cliente_id"], request.args.get("q", "")), can_manage=can_manage_inventory(), productos=products(), origenes=managed_locations, destinos=client_locations, movimientos=movements())
 
 
 @inventory_bp.route("/buscar")
