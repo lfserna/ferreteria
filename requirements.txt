@@ -1,7 +1,5 @@
 Flask
 mysql-connector-python
 python-dotenv
-Werkzeug
-bcrypt
 xhtml2pdf
 gunicorn
