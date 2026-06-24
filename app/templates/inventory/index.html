@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Inventario · Ferretería{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">Stock</p><h1>Inventario por ubicación</h1></div></section>
+<div class="panel">
+    <input class="search-input" type="search" data-stock-search data-target="#stockTable tbody" data-url="{{ url_for('inventory.buscar') }}" placeholder="Buscar producto, código o ubicación...">
+    <div class="responsive-table"><table id="stockTable"><thead><tr><th>Producto</th><th>Ubicación</th><th>Tipo</th><th>Disponible</th><th>Reservado</th><th>Mínimo</th></tr></thead><tbody>
+    {% for row in rows %}<tr><td><strong>{{ row.producto }}</strong><small>{{ row.codigo_producto }}</small></td><td>{{ row.ubicacion }}</td><td>{{ row.tipo_ubicacion }}</td><td>{{ row.cantidad_disponible }}</td><td>{{ row.cantidad_reservada }}</td><td>{{ row.cantidad_minima }}</td></tr>{% endfor %}
+    </tbody></table></div>
+</div>
+{% endblock %}
