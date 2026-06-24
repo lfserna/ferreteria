@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<style>
+@page { size: A4 landscape; margin: 12mm; }
+body { font-family: DejaVu Sans, Arial, sans-serif; font-size: 10px; color: #111827; }
+h1 { font-size: 18px; margin: 0 0 4px; }
+h2 { font-size: 12px; margin: 12px 0 6px; }
+p { margin: 2px 0; }
+.header { border-bottom: 2px solid #111827; padding-bottom: 8px; margin-bottom: 10px; }
+.meta { width: 100%; margin-top: 6px; }
+.meta td { padding: 2px 6px 2px 0; vertical-align: top; }
+.summary { width: 100%; margin: 8px 0 10px; border-collapse: collapse; }
+.summary td { border: 1px solid #d1d5db; padding: 6px; font-size: 11px; }
+.summary strong { display: block; font-size: 14px; }
+table.report { width: 100%; border-collapse: collapse; }
+table.report th { background: #f3f4f6; border: 1px solid #cbd5e1; padding: 5px; text-align: left; font-size: 9px; }
+table.report td { border: 1px solid #e5e7eb; padding: 4px; vertical-align: top; }
+.num { text-align: right; }
+.small { font-size: 8px; color: #4b5563; }
+.empty { padding: 20px; border: 1px solid #e5e7eb; text-align: center; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Reporte de inventario</h1>
+  <p><strong>{{ cliente }}</strong></p>
+  <table class="meta">
+    <tr>
+      <td><strong>Periodo:</strong> {{ periodo }}</td>
+      <td><strong>Desde:</strong> {{ fecha_inicio }}</td>
+      <td><strong>Hasta:</strong> {{ fecha_fin }}</td>
+      <td><strong>Movimiento:</strong> {{ tipo_movimiento }}</td>
+    </tr>
+    <tr>
+      <td colspan="2"><strong>Categorias:</strong> {{ filter_names.categorias|join(', ') if filter_names.categorias else 'Todas' }}</td>
+      <td colspan="2"><strong>Ubicaciones:</strong> {{ filter_names.ubicaciones|join(', ') if filter_names.ubicaciones else 'Todas' }}</td>
+    </tr>
+    <tr>
+      <td colspan="2"><strong>Generado por:</strong> {{ generado_por }}</td>
+      <td colspan="2"><strong>Fecha generacion:</strong> {{ generado_en.strftime('%Y-%m-%d %H:%M') }}</td>
+    </tr>
+  </table>
+</div>
+<table class="summary">
+  <tr>
+    <td><span>Stock actual total</span><strong>{{ totals.stock }}</strong></td>
+    <td><span>Entradas periodo</span><strong>{{ totals.entradas }}</strong></td>
+    <td><span>Salidas periodo</span><strong>{{ totals.salidas }}</strong></td>
+    <td><span>Neto periodo</span><strong>{{ totals.neto }}</strong></td>
+  </tr>
+</table>
+{% if rows %}
+<table class="report">
+  <thead>
+    <tr>
+      <th style="width: 22%;">Producto</th>
+      <th style="width: 13%;">Categoria</th>
+      <th style="width: 18%;">Almacen / ubicacion</th>
+      <th style="width: 8%;">Tipo</th>
+      <th style="width: 8%;">Precio Bs</th>
+      <th style="width: 8%;">Stock</th>
+      <th style="width: 8%;">Entradas</th>
+      <th style="width: 8%;">Salidas</th>
+      <th style="width: 7%;">Neto</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    {% set entradas = row.entradas_periodo|int %}
+    {% set salidas = row.salidas_periodo|int %}
+    <tr>
+      <td>{{ row.producto }}</td>
+      <td>{{ row.categoria }}</td>
+      <td>{{ row.ubicacion }}</td>
+      <td>{{ row.tipo_ubicacion }}</td>
+      <td class="num">{{ '%.2f'|format(row.precio or 0) }}</td>
+      <td class="num">{{ row.stock_actual|int }}</td>
+      <td class="num">{{ entradas }}</td>
+      <td class="num">{{ salidas }}</td>
+      <td class="num">{{ entradas - salidas }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">No hay productos o movimientos para los filtros seleccionados.</div>
+{% endif %}
+<p class="small">Este PDF se genera directamente desde el inventario y no crea registros de reporte en el sistema.</p>
+</body>
+</html>
