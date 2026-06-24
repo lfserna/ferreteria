@@ -1,6 +1,6 @@
 from io import BytesIO
 
-from flask import Blueprint, g, jsonify, make_response, render_template, request
+from flask import Blueprint, g, jsonify, make_response, redirect, render_template, request, url_for
 from xhtml2pdf import pisa
 
 from app.services.context_service import get_primary_stock_location
@@ -11,11 +11,18 @@ from app.utils.serializers import to_jsonable
 
 
 sales_bp = Blueprint("sales", __name__, url_prefix="/ventas")
+SALES_ROLES = {"ADMIN_GENERAL_NEGOCIO", "ADMIN_TIENDA", "CAJERO", "VENDEDOR"}
+
+
+def can_access_sales():
+    return g.user and g.user.get("rol_codigo") in SALES_ROLES
 
 
 @sales_bp.route("")
 @login_required
 def index():
+    if not can_access_sales():
+        return redirect(url_for("inventory.index"))
     can_confirm = g.user["rol_codigo"] in {"ADMIN_GENERAL_NEGOCIO", "ADMIN_TIENDA", "CAJERO"}
     can_send_order = g.user["rol_codigo"] in {"VENDEDOR", "ADMIN_TIENDA", "CAJERO"}
     pending_orders = list_pending_orders(g.user["cliente_id"], g.user.get("sucursal_id")) if can_confirm else []
@@ -25,6 +32,8 @@ def index():
 @sales_bp.route("/api/productos")
 @login_required
 def api_productos():
+    if not can_access_sales():
+        return jsonify({"error": "Tu rol no tiene acceso a ventas."}), 403
     products = search_products(g.user["cliente_id"], request.args.get("q", ""), limit=40)
     return jsonify(to_jsonable(products))
 
@@ -32,6 +41,8 @@ def api_productos():
 @sales_bp.route("/api/ordenes/<int:orden_id>")
 @login_required
 def api_orden(orden_id):
+    if not can_access_sales():
+        return jsonify({"error": "Tu rol no tiene acceso a ventas."}), 403
     order = get_order(g.user["cliente_id"], orden_id)
     if not order:
         return jsonify({"error": "Orden no encontrada."}), 404
@@ -41,6 +52,8 @@ def api_orden(orden_id):
 @sales_bp.route("/ordenes/enviar-caja", methods=["POST"])
 @login_required
 def enviar_caja():
+    if g.user["rol_codigo"] not in {"VENDEDOR", "ADMIN_TIENDA", "CAJERO"}:
+        return jsonify({"error": "Tu rol no puede enviar órdenes a caja."}), 403
     payload = request.get_json(silent=True) or {}
     ubicacion_stock_id = get_primary_stock_location(g.user["cliente_id"], g.user.get("sucursal_id"), g.user.get("almacen_id"))
     if not ubicacion_stock_id:
@@ -74,6 +87,8 @@ def confirmar():
 @sales_bp.route("/<int:venta_id>/comprobante")
 @login_required
 def comprobante(venta_id):
+    if not can_access_sales():
+        return redirect(url_for("inventory.index"))
     receipt = get_sale_receipt(g.user["cliente_id"], venta_id)
     if not receipt:
         return "Comprobante no encontrado", 404
@@ -83,6 +98,8 @@ def comprobante(venta_id):
 @sales_bp.route("/<int:venta_id>/comprobante-pdf")
 @login_required
 def comprobante_pdf(venta_id):
+    if not can_access_sales():
+        return redirect(url_for("inventory.index"))
     receipt = get_sale_receipt(g.user["cliente_id"], venta_id)
     if not receipt:
         return "Comprobante no encontrado", 404
