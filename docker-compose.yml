@@ -1,0 +1,19 @@
+services:
+  ferreteria-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ferreteria-app
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    ports:
+      - "5055:5055"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - ferreteria-net
+
+networks:
+  ferreteria-net:
+    driver: bridge
