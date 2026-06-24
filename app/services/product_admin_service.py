@@ -1,4 +1,5 @@
 import re
+import uuid
 
 from mysql.connector.errors import IntegrityError
 
@@ -91,6 +92,10 @@ def code_type(data: dict):
     return value if value in {"INTERNO", "BARRAS", "SERIE"} else "BARRAS"
 
 
+def make_auto_code(cliente_id, prefix="AUTO"):
+    return f"{prefix}-{cliente_id}-{uuid.uuid4().hex[:10].upper()}"
+
+
 def product_general_code_exists(cursor, cliente_id, field, value, exclude_product_id=None):
     if not value:
         return False
@@ -142,7 +147,9 @@ def create_product(cliente_id: int, user_id: int, data: dict):
     with db_transaction() as (cursor, _connection):
         codigo, codigo_barras, skipped_general_codes = resolve_general_codes(cursor, cliente_id, codigo, codigo_barras)
         producto_activo = estado_value(cursor, "productos", "ACTIVO")
-        product_id = insert_product_row(cursor, cliente_id, categoria_id, data, nombre, codigo, codigo_barras, producto_activo)
+        product_id, fallback_used = insert_product_row(cursor, cliente_id, categoria_id, data, nombre, codigo, codigo_barras, producto_activo)
+        if fallback_used:
+            skipped_general_codes.append({"campo": "codigo_producto/codigo_barras", "codigo": "generado_automaticamente"})
 
         if data.get("precio_venta_estandar") and data.get("precio_minimo_venta"):
             upsert_unit_price(cursor, cliente_id, product_id, data["precio_venta_estandar"], data["precio_minimo_venta"])
@@ -184,43 +191,30 @@ def create_product(cliente_id: int, user_id: int, data: dict):
 
 
 def insert_product_row(cursor, cliente_id, categoria_id, data, nombre, codigo, codigo_barras, producto_activo):
-    payload = (
-        cliente_id,
-        categoria_id,
-        data.get("marca_id") or None,
-        nombre,
-        data.get("descripcion") or None,
-        codigo,
-        codigo_barras,
-        data.get("precio_compra") or None,
-        data.get("contenido_por_caja") or None,
-        producto_activo,
-    )
+    sql = """
+        INSERT INTO productos
+            (cliente_id, categoria_id, marca_id, nombre, descripcion, codigo_producto, codigo_barras,
+             precio_compra, unidad_base, contenido_por_caja, maneja_stock, estado, created_at, updated_at)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'UNIDAD',%s,1,%s,NOW(),NOW())
+    """
     try:
         cursor.execute(
-            """
-            INSERT INTO productos
-                (cliente_id, categoria_id, marca_id, nombre, descripcion, codigo_producto, codigo_barras,
-                 precio_compra, unidad_base, contenido_por_caja, maneja_stock, estado, created_at, updated_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'UNIDAD',%s,1,%s,NOW(),NOW())
-            """,
-            payload,
+            sql,
+            (cliente_id, categoria_id, data.get("marca_id") or None, nombre, data.get("descripcion") or None,
+             codigo, codigo_barras, data.get("precio_compra") or None, data.get("contenido_por_caja") or None, producto_activo),
         )
-        return cursor.lastrowid
+        return cursor.lastrowid, False
     except IntegrityError as error:
         lowered = str(error).lower()
-        if "codigo_producto" in lowered or "codigo_barras" in lowered:
+        if "codigo_producto" in lowered or "codigo_barras" in lowered or "cannot be null" in lowered:
+            auto_codigo = make_auto_code(cliente_id, "AUTO")
+            auto_barras = make_auto_code(cliente_id, "AUTOBAR")
             cursor.execute(
-                """
-                INSERT INTO productos
-                    (cliente_id, categoria_id, marca_id, nombre, descripcion, codigo_producto, codigo_barras,
-                     precio_compra, unidad_base, contenido_por_caja, maneja_stock, estado, created_at, updated_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'UNIDAD',%s,1,%s,NOW(),NOW())
-                """,
+                sql,
                 (cliente_id, categoria_id, data.get("marca_id") or None, nombre, data.get("descripcion") or None,
-                 None, None, data.get("precio_compra") or None, data.get("contenido_por_caja") or None, producto_activo),
+                 auto_codigo, auto_barras, data.get("precio_compra") or None, data.get("contenido_por_caja") or None, producto_activo),
             )
-            return cursor.lastrowid
+            return cursor.lastrowid, True
         raise
 
 
