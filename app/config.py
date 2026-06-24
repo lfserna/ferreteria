@@ -18,6 +18,7 @@ class Config:
     APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/La_Paz")
     APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
     APP_PORT = int(os.getenv("APP_PORT", "5000"))
+    APP_SSL = os.getenv("APP_SSL", "").strip().lower()
 
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
