@@ -91,10 +91,33 @@ def code_type(data: dict):
     return value if value in {"INTERNO", "BARRAS", "SERIE"} else "BARRAS"
 
 
+def product_general_code_exists(cursor, cliente_id, field, value, exclude_product_id=None):
+    if not value:
+        return False
+    extra = ""
+    params = [cliente_id, value]
+    if exclude_product_id:
+        extra = " AND id<>%s"
+        params.append(exclude_product_id)
+    cursor.execute(f"SELECT id FROM productos WHERE cliente_id=%s AND {field}=%s{extra} LIMIT 1", tuple(params))
+    return cursor.fetchone() is not None
+
+
+def resolve_general_codes(cursor, cliente_id, codigo, codigo_barras, exclude_product_id=None):
+    skipped = []
+    if product_general_code_exists(cursor, cliente_id, "codigo_producto", codigo, exclude_product_id):
+        skipped.append({"campo": "codigo_producto", "codigo": codigo})
+        codigo = None
+    if product_general_code_exists(cursor, cliente_id, "codigo_barras", codigo_barras, exclude_product_id):
+        skipped.append({"campo": "codigo_barras", "codigo": codigo_barras})
+        codigo_barras = None
+    return codigo, codigo_barras, skipped
+
+
 def create_product(cliente_id: int, user_id: int, data: dict):
     nombre = (data.get("nombre") or "").strip()
     codigo = (data.get("codigo_producto") or "").strip() or None
-    codigo_barras = (data.get("codigo_barras") or "").strip() or None
+    codigo_barras = normalize_barcode(data.get("codigo_barras") or "") or None
     categoria_id = int(data.get("categoria_id") or 0)
     if not nombre or not categoria_id:
         raise ValueError("Nombre y categoría son obligatorios.")
@@ -113,22 +136,13 @@ def create_product(cliente_id: int, user_id: int, data: dict):
         ensure_product_codes_table_once()
 
     skipped_codes = []
+    skipped_general_codes = []
     registered_codes = 0
 
     with db_transaction() as (cursor, _connection):
+        codigo, codigo_barras, skipped_general_codes = resolve_general_codes(cursor, cliente_id, codigo, codigo_barras)
         producto_activo = estado_value(cursor, "productos", "ACTIVO")
-        cursor.execute(
-            """
-            INSERT INTO productos
-                (cliente_id, categoria_id, marca_id, nombre, descripcion, codigo_producto, codigo_barras,
-                 precio_compra, unidad_base, contenido_por_caja, maneja_stock, estado, created_at, updated_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'UNIDAD',%s,1,%s,NOW(),NOW())
-            """,
-            (cliente_id, categoria_id, data.get("marca_id") or None, nombre, data.get("descripcion") or None,
-             codigo, codigo_barras, data.get("precio_compra") or None,
-             data.get("contenido_por_caja") or None, producto_activo),
-        )
-        product_id = cursor.lastrowid
+        product_id = insert_product_row(cursor, cliente_id, categoria_id, data, nombre, codigo, codigo_barras, producto_activo)
 
         if data.get("precio_venta_estandar") and data.get("precio_minimo_venta"):
             upsert_unit_price(cursor, cliente_id, product_id, data["precio_venta_estandar"], data["precio_minimo_venta"])
@@ -151,6 +165,7 @@ def create_product(cliente_id: int, user_id: int, data: dict):
                 "nombre": nombre,
                 "codigo": codigo,
                 "codigo_barras": codigo_barras,
+                "codigos_generales_omitidos": skipped_general_codes,
                 "cantidad_inicial": initial_qty,
                 "codigos_recibidos": len(codes),
                 "codigos_registrados": registered_codes,
@@ -164,12 +179,55 @@ def create_product(cliente_id: int, user_id: int, data: dict):
         "codes_received": len(codes),
         "codes_registered": registered_codes,
         "codes_skipped": skipped_codes,
+        "general_codes_skipped": skipped_general_codes,
     }
+
+
+def insert_product_row(cursor, cliente_id, categoria_id, data, nombre, codigo, codigo_barras, producto_activo):
+    payload = (
+        cliente_id,
+        categoria_id,
+        data.get("marca_id") or None,
+        nombre,
+        data.get("descripcion") or None,
+        codigo,
+        codigo_barras,
+        data.get("precio_compra") or None,
+        data.get("contenido_por_caja") or None,
+        producto_activo,
+    )
+    try:
+        cursor.execute(
+            """
+            INSERT INTO productos
+                (cliente_id, categoria_id, marca_id, nombre, descripcion, codigo_producto, codigo_barras,
+                 precio_compra, unidad_base, contenido_por_caja, maneja_stock, estado, created_at, updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'UNIDAD',%s,1,%s,NOW(),NOW())
+            """,
+            payload,
+        )
+        return cursor.lastrowid
+    except IntegrityError as error:
+        lowered = str(error).lower()
+        if "codigo_producto" in lowered or "codigo_barras" in lowered:
+            cursor.execute(
+                """
+                INSERT INTO productos
+                    (cliente_id, categoria_id, marca_id, nombre, descripcion, codigo_producto, codigo_barras,
+                     precio_compra, unidad_base, contenido_por_caja, maneja_stock, estado, created_at, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'UNIDAD',%s,1,%s,NOW(),NOW())
+                """,
+                (cliente_id, categoria_id, data.get("marca_id") or None, nombre, data.get("descripcion") or None,
+                 None, None, data.get("precio_compra") or None, data.get("contenido_por_caja") or None, producto_activo),
+            )
+            return cursor.lastrowid
+        raise
 
 
 def update_product(cliente_id: int, user_id: int, product_id: int, data: dict):
     nombre = (data.get("nombre") or "").strip()
     codigo = (data.get("codigo_producto") or "").strip() or None
+    codigo_barras = normalize_barcode(data.get("codigo_barras") or "") or None
     categoria_id = int(data.get("categoria_id") or 0)
     estado = data.get("estado") or "ACTIVO"
     if not nombre or not categoria_id:
@@ -184,6 +242,7 @@ def update_product(cliente_id: int, user_id: int, product_id: int, data: dict):
         previous = cursor.fetchone()
         if not previous:
             raise ValueError("Producto no encontrado.")
+        codigo, codigo_barras, skipped_general_codes = resolve_general_codes(cursor, cliente_id, codigo, codigo_barras, product_id)
         cursor.execute(
             """
             UPDATE productos
@@ -192,8 +251,7 @@ def update_product(cliente_id: int, user_id: int, product_id: int, data: dict):
             WHERE id=%s
             """,
             (categoria_id, data.get("marca_id") or None, nombre, data.get("descripcion") or None, codigo,
-             (data.get("codigo_barras") or "").strip() or None, data.get("precio_compra") or None,
-             data.get("contenido_por_caja") or None, estado, product_id),
+             codigo_barras, data.get("precio_compra") or None, data.get("contenido_por_caja") or None, estado, product_id),
         )
         if data.get("precio_venta_estandar") and data.get("precio_minimo_venta"):
             upsert_unit_price(cursor, cliente_id, product_id, data["precio_venta_estandar"], data["precio_minimo_venta"])
@@ -205,7 +263,7 @@ def update_product(cliente_id: int, user_id: int, product_id: int, data: dict):
             registered_codes = result["registered"]
             skipped_codes = result["skipped"]
 
-        log_audit(cursor, cliente_id=cliente_id, usuario_id=user_id, modulo="CATALOGO", accion="EDITAR_PRODUCTO", tabla_afectada="productos", registro_id=product_id, valor_anterior=previous, valor_nuevo={"nombre": nombre, "estado": estado, "codigos_registrados": registered_codes, "codigos_omitidos": skipped_codes})
+        log_audit(cursor, cliente_id=cliente_id, usuario_id=user_id, modulo="CATALOGO", accion="EDITAR_PRODUCTO", tabla_afectada="productos", registro_id=product_id, valor_anterior=previous, valor_nuevo={"nombre": nombre, "estado": estado, "codigos_generales_omitidos": skipped_general_codes, "codigos_registrados": registered_codes, "codigos_omitidos": skipped_codes})
 
 
 def add_initial_stock(cursor, cliente_id, product_id, location_id, amount, user_id):
