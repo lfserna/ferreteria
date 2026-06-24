@@ -94,21 +94,28 @@ def code_type(data: dict):
 def create_product(cliente_id: int, user_id: int, data: dict):
     nombre = (data.get("nombre") or "").strip()
     codigo = (data.get("codigo_producto") or "").strip() or None
+    codigo_barras = (data.get("codigo_barras") or "").strip() or None
     categoria_id = int(data.get("categoria_id") or 0)
     if not nombre or not categoria_id:
         raise ValueError("Nombre y categoría son obligatorios.")
+
     codes = parse_codes(data.get("codigos_individuales") or "")
     initial_qty = int(data.get("cantidad_inicial") or 0)
     location_id = int(data.get("ubicacion_stock_id") or 0) or None
     tipo_codigo = code_type(data)
+
     if codes and initial_qty and len(codes) > initial_qty:
         raise ValueError("No puedes registrar más códigos individuales que cantidad inicial.")
     if initial_qty and not location_id:
         raise ValueError("Selecciona una ubicación para la cantidad inicial.")
+
+    if codes:
+        ensure_product_codes_table_once()
+
+    skipped_codes = []
+    registered_codes = 0
+
     with db_transaction() as (cursor, _connection):
-        if codes:
-            ensure_product_codes_table(cursor)
-            validate_unique_product_codes(cursor, cliente_id, codes)
         producto_activo = estado_value(cursor, "productos", "ACTIVO")
         cursor.execute(
             """
@@ -118,18 +125,46 @@ def create_product(cliente_id: int, user_id: int, data: dict):
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'UNIDAD',%s,1,%s,NOW(),NOW())
             """,
             (cliente_id, categoria_id, data.get("marca_id") or None, nombre, data.get("descripcion") or None,
-             codigo, (data.get("codigo_barras") or "").strip() or None, data.get("precio_compra") or None,
+             codigo, codigo_barras, data.get("precio_compra") or None,
              data.get("contenido_por_caja") or None, producto_activo),
         )
         product_id = cursor.lastrowid
+
         if data.get("precio_venta_estandar") and data.get("precio_minimo_venta"):
             upsert_unit_price(cursor, cliente_id, product_id, data["precio_venta_estandar"], data["precio_minimo_venta"])
         if initial_qty:
             add_initial_stock(cursor, cliente_id, product_id, location_id, initial_qty, user_id)
         if codes:
-            insert_product_codes(cursor, cliente_id, product_id, location_id, codes, tipo_codigo)
-        log_audit(cursor, cliente_id=cliente_id, usuario_id=user_id, modulo="CATALOGO", accion="CREAR_PRODUCTO", tabla_afectada="productos", registro_id=product_id, valor_nuevo={"nombre": nombre, "codigo": codigo, "cantidad_inicial": initial_qty, "codigos": len(codes), "tipo_codigo": tipo_codigo})
-        return product_id
+            result = insert_product_codes(cursor, cliente_id, product_id, location_id, codes, tipo_codigo)
+            registered_codes = result["registered"]
+            skipped_codes = result["skipped"]
+
+        log_audit(
+            cursor,
+            cliente_id=cliente_id,
+            usuario_id=user_id,
+            modulo="CATALOGO",
+            accion="CREAR_PRODUCTO",
+            tabla_afectada="productos",
+            registro_id=product_id,
+            valor_nuevo={
+                "nombre": nombre,
+                "codigo": codigo,
+                "codigo_barras": codigo_barras,
+                "cantidad_inicial": initial_qty,
+                "codigos_recibidos": len(codes),
+                "codigos_registrados": registered_codes,
+                "codigos_omitidos": skipped_codes,
+                "tipo_codigo": tipo_codigo,
+            },
+        )
+
+    return {
+        "product_id": product_id,
+        "codes_received": len(codes),
+        "codes_registered": registered_codes,
+        "codes_skipped": skipped_codes,
+    }
 
 
 def update_product(cliente_id: int, user_id: int, product_id: int, data: dict):
@@ -139,6 +174,11 @@ def update_product(cliente_id: int, user_id: int, product_id: int, data: dict):
     estado = data.get("estado") or "ACTIVO"
     if not nombre or not categoria_id:
         raise ValueError("Nombre y categoría son obligatorios.")
+
+    codes = parse_codes(data.get("codigos_individuales") or "")
+    if codes:
+        ensure_product_codes_table_once()
+
     with db_transaction() as (cursor, _connection):
         cursor.execute("SELECT * FROM productos WHERE cliente_id=%s AND id=%s FOR UPDATE", (cliente_id, product_id))
         previous = cursor.fetchone()
@@ -157,12 +197,15 @@ def update_product(cliente_id: int, user_id: int, product_id: int, data: dict):
         )
         if data.get("precio_venta_estandar") and data.get("precio_minimo_venta"):
             upsert_unit_price(cursor, cliente_id, product_id, data["precio_venta_estandar"], data["precio_minimo_venta"])
-        codes = parse_codes(data.get("codigos_individuales") or "")
+
+        registered_codes = 0
+        skipped_codes = []
         if codes:
-            ensure_product_codes_table(cursor)
-            validate_unique_product_codes(cursor, cliente_id, codes)
-            insert_product_codes(cursor, cliente_id, product_id, None, codes, code_type(data))
-        log_audit(cursor, cliente_id=cliente_id, usuario_id=user_id, modulo="CATALOGO", accion="EDITAR_PRODUCTO", tabla_afectada="productos", registro_id=product_id, valor_anterior=previous, valor_nuevo={"nombre": nombre, "estado": estado, "codigos_agregados": len(codes)})
+            result = insert_product_codes(cursor, cliente_id, product_id, None, codes, code_type(data))
+            registered_codes = result["registered"]
+            skipped_codes = result["skipped"]
+
+        log_audit(cursor, cliente_id=cliente_id, usuario_id=user_id, modulo="CATALOGO", accion="EDITAR_PRODUCTO", tabla_afectada="productos", registro_id=product_id, valor_anterior=previous, valor_nuevo={"nombre": nombre, "estado": estado, "codigos_registrados": registered_codes, "codigos_omitidos": skipped_codes})
 
 
 def add_initial_stock(cursor, cliente_id, product_id, location_id, amount, user_id):
@@ -176,6 +219,11 @@ def add_initial_stock(cursor, cliente_id, product_id, location_id, amount, user_
         inv_id = cursor.lastrowid
     cursor.execute("INSERT INTO inventario_movimientos (cliente_id,producto_id,ubicacion_destino_id,tipo_movimiento,cantidad,referencia_tipo,referencia_id,usuario_id,observacion,created_at) VALUES (%s,%s,%s,'ENTRADA',%s,'PRODUCTO',%s,%s,'Stock inicial al crear producto',NOW())", (cliente_id, product_id, location_id, amount, product_id, user_id))
     return inv_id
+
+
+def ensure_product_codes_table_once():
+    with db_cursor(commit=True) as cursor:
+        ensure_product_codes_table(cursor)
 
 
 def ensure_product_codes_table(cursor):
@@ -199,29 +247,41 @@ def ensure_product_codes_table(cursor):
     )
 
 
-def validate_unique_product_codes(cursor, cliente_id, codes):
-    if not codes:
-        return
-    aliases = []
-    for code in codes:
-        aliases.extend(sorted(barcode_aliases(code)))
-    aliases = sorted(set(aliases))
-    placeholders = ",".join(["%s"] * len(aliases))
-    cursor.execute(f"SELECT codigo FROM producto_codigos WHERE cliente_id=%s AND codigo IN ({placeholders}) LIMIT 1", tuple([cliente_id] + aliases))
-    row = cursor.fetchone()
-    if row:
-        raise ValueError(f"El código individual ya existe en la base: {row['codigo']}")
-
-
 def insert_product_codes(cursor, cliente_id, product_id, location_id, codes, tipo_codigo="BARRAS"):
-    ensure_product_codes_table(cursor)
     estado = estado_value(cursor, "producto_codigos", "DISPONIBLE")
+    registered = 0
+    skipped = []
+
     for code in codes:
         normalized = normalize_barcode(code)
+        aliases = sorted(barcode_aliases(normalized))
+        placeholders = ",".join(["%s"] * len(aliases))
+        cursor.execute(
+            f"SELECT codigo FROM producto_codigos WHERE cliente_id=%s AND codigo IN ({placeholders}) LIMIT 1",
+            tuple([cliente_id] + aliases),
+        )
+        existing = cursor.fetchone()
+        if existing:
+            skipped.append(normalized)
+            continue
+
         try:
-            cursor.execute("INSERT INTO producto_codigos (cliente_id,producto_id,ubicacion_stock_id,codigo,tipo_codigo,estado,created_at) VALUES (%s,%s,%s,%s,%s,%s,NOW())", (cliente_id, product_id, location_id, normalized, tipo_codigo, estado))
+            cursor.execute(
+                """
+                INSERT IGNORE INTO producto_codigos
+                    (cliente_id,producto_id,ubicacion_stock_id,codigo,tipo_codigo,estado,created_at)
+                VALUES (%s,%s,%s,%s,%s,%s,NOW())
+                """,
+                (cliente_id, product_id, location_id, normalized, tipo_codigo, estado),
+            )
+            if cursor.rowcount == 1:
+                registered += 1
+            else:
+                skipped.append(normalized)
         except IntegrityError:
-            raise ValueError(f"El código individual ya existe en la base: {normalized}")
+            skipped.append(normalized)
+
+    return {"registered": registered, "skipped": skipped}
 
 
 def upsert_unit_price(cursor, cliente_id: int, product_id: int, precio_venta, precio_minimo):
