@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+!.env.docker.example
+.venv/
+venv/
+.git/
+.gitignore
+.pytest_cache/
+.DS_Store
+cert.pem
+key.pem
+certs/
