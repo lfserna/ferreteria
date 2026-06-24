@@ -13,6 +13,7 @@ def create_app():
     from app.routes.product_routes import products_bp
     from app.routes.report_routes import reports_bp
     from app.routes.sales_routes import sales_bp
+    from app.routes.user_routes import users_bp
 
     @app.before_request
     def load_logged_user():
@@ -31,5 +32,6 @@ def create_app():
     app.register_blueprint(inventory_bp)
     app.register_blueprint(sales_bp)
     app.register_blueprint(reports_bp)
+    app.register_blueprint(users_bp)
 
     return app
