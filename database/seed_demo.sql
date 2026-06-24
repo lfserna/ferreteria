@@ -11,7 +11,7 @@ INSERT IGNORE INTO rol_permisos (rol_id,permiso_id) SELECT 4,id FROM permisos WH
 INSERT IGNORE INTO rol_permisos (rol_id,permiso_id) SELECT 5,id FROM permisos WHERE codigo IN ('productos.ver','inventario.ver','ventas.crear_carrito');
 
 -- Contraseña demo: Admin123!
-SET @hash_admin='pbkdf2:sha256:1000000$demo-ferreteria-1$dcd8604638d8eaca2ec3995a8acb7f127dfcf554cc2db3eb1c17770d68705d56';
+SET @hash_admin='pbkdf2:sha256:1000000$ferreteria-demo-2026$4b6f20e2d0c9051973427dbc357be88712008dd91a6149d8b21efe5da32f0696';
 INSERT IGNORE INTO usuarios (id,cliente_id,sucursal_id,username,password_hash,nombres,apellido_paterno,apellido_materno,edad,celular,email,estado) VALUES (1,1,1,'admin',@hash_admin,'Administrador','General','Demo',35,'70000100','admin@ferreteria.test','ACTIVO'),(2,1,1,'cajero.centro',@hash_admin,'Carla','Vargas','Lima',29,'70000101','cajero.centro@ferreteria.test','ACTIVO'),(3,1,2,'cajero.norte',@hash_admin,'Mario','Condori','Rojas',31,'70000102','cajero.norte@ferreteria.test','ACTIVO'),(4,1,1,'vendedor.centro',@hash_admin,'Sofía','Mamani','Quispe',24,'70000103','vendedor.centro@ferreteria.test','ACTIVO'),(5,1,2,'vendedor.norte',@hash_admin,'Diego','Flores','Nina',26,'70000104','vendedor.norte@ferreteria.test','ACTIVO'),(6,1,NULL,'almacen.central',@hash_admin,'Pedro','Quispe','Callisaya',42,'70000105','almacen@ferreteria.test','ACTIVO');
 INSERT IGNORE INTO usuario_roles (id,cliente_id,usuario_id,rol_id,alcance,sucursal_id,almacen_id,estado) VALUES (1,1,1,1,'CLIENTE',NULL,NULL,'ACTIVO'),(2,1,2,4,'SUCURSAL',1,NULL,'ACTIVO'),(3,1,3,4,'SUCURSAL',2,NULL,'ACTIVO'),(4,1,4,5,'SUCURSAL',1,NULL,'ACTIVO'),(5,1,5,5,'SUCURSAL',2,NULL,'ACTIVO'),(6,1,6,3,'ALMACEN',NULL,1,'ACTIVO');
 
