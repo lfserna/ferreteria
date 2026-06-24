@@ -4,7 +4,7 @@ from mysql.connector.errors import IntegrityError
 from app.database import db_cursor, db_transaction
 from app.services.audit_service import log_audit
 from app.services.category_admin_service import create_brand, create_category, estado_value, list_brands, list_categories_admin, update_brand, update_category
-from app.services.product_admin_service import create_product
+from app.services.product_admin_service import barcode_aliases, create_product, parse_codes
 from app.utils.permissions import can_manage_inventory, can_manage_products
 from app.utils.security import login_required
 from app.utils.serializers import to_jsonable
@@ -143,6 +143,18 @@ def inv_id(c, product_id, location_id):
     return c.lastrowid
 
 
+def duplicated_integrity_message(error):
+    text = str(error)
+    lowered = text.lower()
+    if "codigo_producto" in lowered:
+        return "No se pudo guardar: el código general del producto ya existe. Déjalo vacío o usa otro."
+    if "codigo_barras" in lowered:
+        return "No se pudo guardar: el código de barras general del producto ya existe. Déjalo vacío o usa otro."
+    if "producto_codigos" in lowered:
+        return "No se pudo guardar por un código individual duplicado. Detalle técnico: " + text
+    return "No se pudo guardar por un dato duplicado. Detalle técnico: " + text
+
+
 @inventory_bp.route("")
 @login_required
 def index():
@@ -234,13 +246,21 @@ def crear_producto():
         allowed_managed(ubicacion_id)
         data = request.form.copy()
         data["cantidad_inicial"] = str(cantidad)
-        product_id = create_product(g.user["cliente_id"], g.user["id"], data)
+        result = create_product(g.user["cliente_id"], g.user["id"], data)
+        product_id = result["product_id"] if isinstance(result, dict) else result
+        skipped = result.get("codes_skipped", []) if isinstance(result, dict) else []
+        registered = result.get("codes_registered", 0) if isinstance(result, dict) else 0
         message = "Producto agregado correctamente al inventario."
+        if skipped:
+            shown = ", ".join(skipped[:5])
+            message += f" Códigos registrados: {registered}. Códigos omitidos porque ya existían: {shown}"
+            if len(skipped) > 5:
+                message += f" y {len(skipped) - 5} más."
         if wants_json():
-            return jsonify({"ok": True, "message": message, "product_id": product_id})
-        flash(message, "success")
-    except IntegrityError:
-        message = "No se pudo guardar: uno de los códigos individuales ya existe."
+            return jsonify({"ok": True, "message": message, "product_id": product_id, "codes_skipped": skipped, "codes_registered": registered})
+        flash(message, "warning" if skipped else "success")
+    except IntegrityError as e:
+        message = duplicated_integrity_message(e)
         if wants_json():
             return jsonify({"ok": False, "message": message}), 400
         flash(message, "danger")
@@ -249,6 +269,36 @@ def crear_producto():
             return jsonify({"ok": False, "message": str(e)}), 400
         flash(str(e), "danger")
     return redirect(url_for("inventory.index"))
+
+
+@inventory_bp.route("/codigos/diagnostico", methods=["POST"])
+@login_required
+def diagnostico_codigos():
+    if not can_manage_products():
+        return jsonify({"ok": False, "message": "Sin permisos."}), 403
+    try:
+        raw = request.form.get("codigos_individuales") or (request.json or {}).get("codigos_individuales") or ""
+        codes = parse_codes(raw)
+        rows = []
+        with db_cursor() as c:
+            for code in codes:
+                aliases = sorted(barcode_aliases(code))
+                placeholders = ",".join(["%s"] * len(aliases))
+                c.execute(
+                    f"""
+                    SELECT pc.codigo, pc.producto_id, p.nombre AS producto
+                    FROM producto_codigos pc
+                    LEFT JOIN productos p ON p.id=pc.producto_id
+                    WHERE pc.cliente_id=%s AND pc.codigo IN ({placeholders})
+                    LIMIT 1
+                    """,
+                    tuple([g.user["cliente_id"]] + aliases),
+                )
+                found = c.fetchone()
+                rows.append({"codigo": code, "aliases": aliases, "existe": bool(found), "existente": found})
+        return jsonify({"ok": True, "codes": rows})
+    except ValueError as e:
+        return jsonify({"ok": False, "message": str(e)}), 400
 
 
 @inventory_bp.route("/api/productos/<int:product_id>")
