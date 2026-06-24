@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Productos · Ferretería{% endblock %}
+{% block title %}Productos y stock · Ferretería{% endblock %}
 {% block content %}
-<section class="page-heading"><div><p class="eyebrow">Catálogo</p><h1>Productos</h1></div></section>
+<section class="page-heading"><div><p class="eyebrow">Catálogo operativo</p><h1>Productos y stock</h1><p class="page-note">Aquí se muestra junto lo que se vende y cuánto hay disponible por tienda o almacén.</p></div></section>
 <div class="panel">
     <input class="search-input" type="search" data-auto-search data-target="#productTable tbody" data-url="{{ url_for('products.buscar') }}" placeholder="Buscar por nombre, descripción, código o barras...">
-    <div class="responsive-table"><table id="productTable"><thead><tr><th>Producto</th><th>Código</th><th>Categoría</th><th>Presentación</th><th>Precio</th><th>Mínimo</th><th>Stock</th></tr></thead><tbody>
-    {% for p in products %}<tr><td><strong>{{ p.nombre }}</strong><small>{{ p.descripcion }}</small></td><td>{{ p.codigo_producto }}<small>{{ p.codigo_barras }}</small></td><td>{{ p.categoria }}</td><td>{{ p.presentacion }}</td><td>Bs {{ '%.2f'|format(p.precio_venta_estandar) }}</td><td>Bs {{ '%.2f'|format(p.precio_minimo_venta) }}</td><td>{{ p.stock_total }}</td></tr>{% endfor %}
+    <div class="responsive-table"><table id="productTable"><thead><tr><th>Producto</th><th>Código</th><th>Categoría</th><th>Presentación</th><th>Precio</th><th>Mínimo</th><th>Stock total</th><th>Stock por ubicación</th></tr></thead><tbody>
+    {% for p in products %}<tr><td><strong>{{ p.nombre }}</strong><small>{{ p.descripcion }}</small></td><td>{{ p.codigo_producto }}<small>{{ p.codigo_barras }}</small></td><td>{{ p.categoria }}</td><td>{{ p.presentacion or 'Unidad' }}{% if not p.vendible %}<small>No vendible: falta precio o presentación</small>{% endif %}</td><td>{% if p.precio_venta_estandar is not none %}Bs {{ '%.2f'|format(p.precio_venta_estandar) }}{% else %}Sin precio{% endif %}</td><td>{% if p.precio_minimo_venta is not none %}Bs {{ '%.2f'|format(p.precio_minimo_venta) }}{% else %}Sin precio{% endif %}</td><td>{{ p.stock_total|int }}</td><td><small>{{ p.stock_ubicaciones }}</small></td></tr>{% else %}<tr><td colspan="8">Sin productos. Verifica que hayas importado `database/seed_demo.sql` o creado productos activos.</td></tr>{% endfor %}
     </tbody></table></div>
 </div>
 {% endblock %}

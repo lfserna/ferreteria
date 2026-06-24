@@ -9,6 +9,8 @@ Aplicación Flask modular para una ferretería multi-cliente, multi-sucursal y m
 - Layout responsivo para laptop, tablet y celular.
 - Barra inferior fija en móvil con acción principal sobresaliente para ventas.
 - Buscador automático de productos por nombre, descripción, código interno o código de barras.
+- Vista unificada de productos y stock por ubicación.
+- Cantidades manejadas como unidades enteras, sin decimales.
 - Filtros automáticos sin botón de aplicar.
 - Selección por burbujas para opciones cortas, como método de pago.
 - Venta desde cero para cajero.
@@ -16,7 +18,10 @@ Aplicación Flask modular para una ferretería multi-cliente, multi-sucursal y m
 - Pedidos enviados a caja visibles para cajeros.
 - Validación de rebaja: el precio vendido no puede bajar del precio mínimo permitido.
 - Confirmación de venta con llave de idempotencia para evitar duplicados por doble clic.
-- Registro de auditoría para login, envío de orden a caja y confirmación de venta.
+- Registro de auditoría para login, creación de usuario, cambios de límite, envío de orden a caja y confirmación de venta.
+- Gestión de usuarios con username automático, por ejemplo Luis Serna → `lserna`.
+- Contraseña por defecto para usuarios nuevos: `hola123`.
+- Límite configurable de usuarios por cliente.
 - Comprobante imprimible y PDF de 58 mm usando template editable.
 - Base preparada para proveedores y compras opcionales.
 - Preparado para ejecución local con `flask run` o `python run.py`, y producción con Gunicorn.
@@ -36,7 +41,25 @@ Edita `.env` con tus datos de MySQL.
 
 ```bash
 mysql -u root -p < database/schema.sql
+mysql -u root -p restaurante_sistema < database/migrations/001_add_cliente_max_usuarios.sql
+mysql -u root -p restaurante_sistema < database/migrations/002_force_integer_quantities.sql
 mysql -u root -p restaurante_sistema < database/seed_demo.sql
+```
+
+Si ya tenías la base creada antes de esta actualización, ejecuta:
+
+```bash
+mysql -u root -p restaurante_sistema < database/migrations/001_add_cliente_max_usuarios.sql
+mysql -u root -p restaurante_sistema < database/migrations/002_force_integer_quantities.sql
+```
+
+Si productos o ventas aparecen vacíos, verifica que exista data demo:
+
+```sql
+SELECT COUNT(*) AS productos FROM productos;
+SELECT COUNT(*) AS presentaciones FROM producto_presentaciones;
+SELECT COUNT(*) AS precios FROM producto_precios;
+SELECT COUNT(*) AS inventarios FROM inventarios;
 ```
 
 Usuario demo:
@@ -47,6 +70,8 @@ Contraseña: Admin123!
 ```
 
 Otros usuarios demo usan la misma contraseña: `cajero.centro`, `cajero.norte`, `vendedor.centro`, `vendedor.norte`, `almacen.central`.
+
+Los usuarios creados desde el sistema se generan con contraseña por defecto `hola123`.
 
 ## Ejecución
 

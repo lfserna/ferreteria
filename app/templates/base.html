@@ -13,9 +13,10 @@
     <nav class="side-nav">
         <a href="{{ url_for('dashboard.index') }}">Inicio</a>
         <a href="{{ url_for('sales.index') }}" class="nav-primary">Vender</a>
-        <a href="{{ url_for('products.index') }}">Productos</a>
+        <a href="{{ url_for('products.index') }}">Productos y stock</a>
         <a href="{{ url_for('inventory.index') }}">Inventario</a>
         <a href="{{ url_for('reports.index') }}">Reportes</a>
+        {% if current_user.rol_codigo in ['ADMIN_GENERAL_NEGOCIO','ADMIN_TIENDA'] %}<a href="{{ url_for('users.index') }}">Usuarios</a>{% endif %}
     </nav>
 </aside>
 {% endif %}
@@ -37,7 +38,7 @@
     <a href="{{ url_for('products.index') }}"><span>▦</span><small>Productos</small></a>
     <a href="{{ url_for('sales.index') }}" class="bottom-nav__main"><span>＋</span><small>Vender</small></a>
     <a href="{{ url_for('inventory.index') }}"><span>⌁</span><small>Stock</small></a>
-    <a href="{{ url_for('reports.index') }}"><span>◷</span><small>Reportes</small></a>
+    {% if current_user.rol_codigo in ['ADMIN_GENERAL_NEGOCIO','ADMIN_TIENDA'] %}<a href="{{ url_for('users.index') }}"><span>◉</span><small>Usuarios</small></a>{% else %}<a href="{{ url_for('reports.index') }}"><span>◷</span><small>Reportes</small></a>{% endif %}
 </nav>
 {% endif %}
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>

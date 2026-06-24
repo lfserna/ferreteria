@@ -10,6 +10,16 @@ def money(value):
     return Decimal(str(value or "0")).quantize(Decimal("0.01"))
 
 
+def whole_units(value, field_name="cantidad"):
+    try:
+        decimal_value = Decimal(str(value or "0"))
+    except Exception as exc:
+        raise ValueError(f"La {field_name} debe ser un número entero.") from exc
+    if decimal_value <= 0 or decimal_value != decimal_value.to_integral_value():
+        raise ValueError(f"La {field_name} debe ser un número entero mayor a cero.")
+    return int(decimal_value)
+
+
 def list_pending_orders(cliente_id: int, sucursal_id: int | None):
     with db_cursor() as cursor:
         params = [cliente_id]
@@ -60,17 +70,15 @@ def prepare_items(cursor, cliente_id, items):
     for raw in items:
         producto_id = int(raw["producto_id"])
         presentacion_id = int(raw["presentacion_id"])
-        cantidad = money(raw.get("cantidad", 1))
+        cantidad = whole_units(raw.get("cantidad", 1))
         precio_unitario = money(raw.get("precio_unitario"))
-        if cantidad <= 0:
-            raise ValueError("La cantidad debe ser mayor a cero.")
         cursor.execute(
             """
             SELECT p.id AS producto_id, p.nombre AS producto_nombre, pp.id AS presentacion_id,
                    pp.nombre AS presentacion_nombre, pp.factor_unidad_base,
                    pr.precio_venta_estandar, pr.precio_minimo_venta
             FROM productos p
-            JOIN producto_presentaciones pp ON pp.producto_id = p.id
+            JOIN producto_presentaciones pp ON pp.producto_id = p.id AND pp.estado = 'ACTIVO'
             JOIN producto_precios pr ON pr.producto_presentacion_id = pp.id AND pr.estado = 'ACTIVO'
             WHERE p.cliente_id = %s AND p.id = %s AND pp.id = %s AND p.estado = 'ACTIVO'
             LIMIT 1
@@ -79,7 +87,8 @@ def prepare_items(cursor, cliente_id, items):
         )
         product = cursor.fetchone()
         if not product:
-            raise ValueError("Producto inválido.")
+            raise ValueError("Producto inválido o sin precio de venta configurado.")
+        factor = whole_units(product["factor_unidad_base"], "factor de presentación")
         precio_estandar = money(product["precio_venta_estandar"])
         precio_minimo = money(product["precio_minimo_venta"])
         if precio_unitario <= 0:
@@ -88,7 +97,6 @@ def prepare_items(cursor, cliente_id, items):
             raise ValueError(f"{product['producto_nombre']} no puede venderse por debajo de {precio_minimo}.")
         if precio_unitario > precio_estandar:
             raise ValueError(f"{product['producto_nombre']} no puede venderse por encima del precio estándar.")
-        factor = Decimal(str(product["factor_unidad_base"]))
         prepared.append({
             "producto_id": product["producto_id"],
             "producto_nombre": product["producto_nombre"],
@@ -240,8 +248,8 @@ def items_from_order(cursor, order_id):
     )
     rows = cursor.fetchall()
     for row in rows:
-        row["cantidad"] = money(row["cantidad"])
-        row["cantidad_base"] = row["cantidad"] * Decimal(str(row["factor_unidad_base"]))
+        row["cantidad"] = whole_units(row["cantidad"])
+        row["cantidad_base"] = row["cantidad"] * whole_units(row["factor_unidad_base"], "factor de presentación")
         row["precio_estandar"] = money(row["precio_estandar"])
         row["precio_minimo"] = money(row["precio_minimo"])
         row["precio_unitario"] = money(row["precio_unitario"])
@@ -253,7 +261,7 @@ def discount_stock(cursor, cliente_id, ubicacion_stock_id, item):
     inv = cursor.fetchone()
     if not inv:
         raise ValueError(f"No existe stock configurado para {item['producto_nombre']} en esta ubicación.")
-    if Decimal(str(inv["cantidad_disponible"])) < item["cantidad_base"]:
+    if whole_units(inv["cantidad_disponible"], "stock disponible") < item["cantidad_base"]:
         raise ValueError(f"Stock insuficiente para {item['producto_nombre']}.")
     cursor.execute("UPDATE inventarios SET cantidad_disponible = cantidad_disponible - %s, updated_at = NOW() WHERE id = %s", (item["cantidad_base"], inv["id"]))
 
