@@ -19,6 +19,8 @@ class Config:
     APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
     APP_PORT = int(os.getenv("APP_PORT", "5000"))
     APP_SSL = os.getenv("APP_SSL", "").strip().lower()
+    APP_SSL_CERT = os.getenv("APP_SSL_CERT", "certs/dev-cert.pem")
+    APP_SSL_KEY = os.getenv("APP_SSL_KEY", "certs/dev-key.pem")
 
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
