@@ -10,6 +10,7 @@ Aplicación Flask modular para una ferretería multi-cliente, multi-sucursal y m
 - Barra inferior fija en móvil con acción principal sobresaliente para ventas.
 - Buscador automático de productos por nombre, descripción, código interno o código de barras.
 - Vista unificada de productos y stock por ubicación.
+- Cantidades manejadas como unidades enteras, sin decimales.
 - Filtros automáticos sin botón de aplicar.
 - Selección por burbujas para opciones cortas, como método de pago.
 - Venta desde cero para cajero.
@@ -41,13 +42,24 @@ Edita `.env` con tus datos de MySQL.
 ```bash
 mysql -u root -p < database/schema.sql
 mysql -u root -p restaurante_sistema < database/migrations/001_add_cliente_max_usuarios.sql
+mysql -u root -p restaurante_sistema < database/migrations/002_force_integer_quantities.sql
 mysql -u root -p restaurante_sistema < database/seed_demo.sql
 ```
 
-Si ya tenías la base creada antes de esta actualización, ejecuta solo:
+Si ya tenías la base creada antes de esta actualización, ejecuta:
 
 ```bash
 mysql -u root -p restaurante_sistema < database/migrations/001_add_cliente_max_usuarios.sql
+mysql -u root -p restaurante_sistema < database/migrations/002_force_integer_quantities.sql
+```
+
+Si productos o ventas aparecen vacíos, verifica que exista data demo:
+
+```sql
+SELECT COUNT(*) AS productos FROM productos;
+SELECT COUNT(*) AS presentaciones FROM producto_presentaciones;
+SELECT COUNT(*) AS precios FROM producto_precios;
+SELECT COUNT(*) AS inventarios FROM inventarios;
 ```
 
 Usuario demo:
