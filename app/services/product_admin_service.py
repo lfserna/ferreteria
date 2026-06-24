@@ -2,6 +2,7 @@ import re
 
 from app.database import db_cursor, db_transaction
 from app.services.audit_service import log_audit
+from app.services.category_admin_service import estado_value
 
 
 def list_products_admin(cliente_id: int, query: str = ""):
@@ -16,8 +17,8 @@ def list_products_admin(cliente_id: int, query: str = ""):
             FROM productos p
             JOIN categorias_producto c ON c.id = p.categoria_id
             LEFT JOIN marcas m ON m.id = p.marca_id
-            LEFT JOIN producto_presentaciones pp ON pp.producto_id = p.id AND pp.tipo_presentacion='UNIDAD' AND pp.estado='ACTIVO'
-            LEFT JOIN producto_precios pr ON pr.producto_presentacion_id = pp.id AND pr.estado='ACTIVO'
+            LEFT JOIN producto_presentaciones pp ON pp.producto_id = p.id AND pp.tipo_presentacion='UNIDAD'
+            LEFT JOIN producto_precios pr ON pr.id=(SELECT pr2.id FROM producto_precios pr2 WHERE pr2.producto_presentacion_id=pp.id ORDER BY pr2.id DESC LIMIT 1)
             LEFT JOIN (SELECT cliente_id, producto_id, SUM(cantidad_disponible) AS stock_total FROM inventarios GROUP BY cliente_id, producto_id) stock ON stock.cliente_id = p.cliente_id AND stock.producto_id = p.id
             WHERE p.cliente_id=%s AND p.deleted_at IS NULL
               AND (p.nombre LIKE %s OR COALESCE(p.descripcion,'') LIKE %s OR COALESCE(p.codigo_producto,'') LIKE %s OR COALESCE(p.codigo_barras,'') LIKE %s)
@@ -41,8 +42,8 @@ def get_product(cliente_id: int, product_id: int):
             """
             SELECT p.*, pp.id AS presentacion_id, pr.precio_venta_estandar, pr.precio_minimo_venta
             FROM productos p
-            LEFT JOIN producto_presentaciones pp ON pp.producto_id=p.id AND pp.tipo_presentacion='UNIDAD' AND pp.estado='ACTIVO'
-            LEFT JOIN producto_precios pr ON pr.producto_presentacion_id=pp.id AND pr.estado='ACTIVO'
+            LEFT JOIN producto_presentaciones pp ON pp.producto_id=p.id AND pp.tipo_presentacion='UNIDAD'
+            LEFT JOIN producto_precios pr ON pr.id=(SELECT pr2.id FROM producto_precios pr2 WHERE pr2.producto_presentacion_id=pp.id ORDER BY pr2.id DESC LIMIT 1)
             WHERE p.cliente_id=%s AND p.id=%s AND p.deleted_at IS NULL
             LIMIT 1
             """,
@@ -77,16 +78,17 @@ def create_product(cliente_id: int, user_id: int, data: dict):
     if initial_qty and not location_id:
         raise ValueError("Selecciona una ubicación para la cantidad inicial.")
     with db_transaction() as (cursor, _connection):
+        producto_activo = estado_value(cursor, "productos", "ACTIVO")
         cursor.execute(
             """
             INSERT INTO productos
                 (cliente_id, categoria_id, marca_id, nombre, descripcion, codigo_producto, codigo_barras,
                  precio_compra, unidad_base, contenido_por_caja, maneja_stock, estado, created_at, updated_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'UNIDAD',%s,1,'ACTIVO',NOW(),NOW())
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'UNIDAD',%s,1,%s,NOW(),NOW())
             """,
             (cliente_id, categoria_id, data.get("marca_id") or None, nombre, data.get("descripcion") or None,
              codigo, (data.get("codigo_barras") or "").strip() or None, data.get("precio_compra") or None,
-             data.get("contenido_por_caja") or None),
+             data.get("contenido_por_caja") or None, producto_activo),
         )
         product_id = cursor.lastrowid
         if data.get("precio_venta_estandar") and data.get("precio_minimo_venta"):
@@ -151,12 +153,16 @@ def insert_product_codes(cursor, cliente_id, product_id, location_id, codes):
 def upsert_unit_price(cursor, cliente_id: int, product_id: int, precio_venta, precio_minimo):
     if float(precio_minimo) > float(precio_venta):
         raise ValueError("El precio mínimo no puede ser mayor al precio estándar.")
+    presentacion_activa = estado_value(cursor, "producto_presentaciones", "ACTIVO")
+    precio_activo = estado_value(cursor, "producto_precios", "ACTIVO")
+    precio_inactivo = estado_value(cursor, "producto_precios", "INACTIVO")
     cursor.execute("SELECT id FROM producto_presentaciones WHERE cliente_id=%s AND producto_id=%s AND tipo_presentacion='UNIDAD' LIMIT 1", (cliente_id, product_id))
     row = cursor.fetchone()
     if row:
         presentation_id = row["id"]
+        cursor.execute("UPDATE producto_presentaciones SET nombre='Unidad',factor_unidad_base=1,estado=%s,updated_at=NOW() WHERE id=%s", (presentacion_activa, presentation_id))
     else:
-        cursor.execute("INSERT INTO producto_presentaciones (cliente_id, producto_id, tipo_presentacion, nombre, factor_unidad_base, estado, created_at, updated_at) VALUES (%s,%s,'UNIDAD','Unidad',1,'ACTIVO',NOW(),NOW())", (cliente_id, product_id))
+        cursor.execute("INSERT INTO producto_presentaciones (cliente_id, producto_id, tipo_presentacion, nombre, factor_unidad_base, estado, created_at, updated_at) VALUES (%s,%s,'UNIDAD','Unidad',1,%s,NOW(),NOW())", (cliente_id, product_id, presentacion_activa))
         presentation_id = cursor.lastrowid
-    cursor.execute("UPDATE producto_precios SET estado='INACTIVO', updated_at=NOW() WHERE cliente_id=%s AND producto_presentacion_id=%s AND estado='ACTIVO'", (cliente_id, presentation_id))
-    cursor.execute("INSERT INTO producto_precios (cliente_id, producto_id, producto_presentacion_id, precio_venta_estandar, precio_minimo_venta, moneda, vigente_desde, estado, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,'BOB',NOW(),'ACTIVO',NOW(),NOW())", (cliente_id, product_id, presentation_id, precio_venta, precio_minimo))
+    cursor.execute("UPDATE producto_precios SET estado=%s, updated_at=NOW() WHERE cliente_id=%s AND producto_presentacion_id=%s", (precio_inactivo, cliente_id, presentation_id))
+    cursor.execute("INSERT INTO producto_precios (cliente_id, producto_id, producto_presentacion_id, precio_venta_estandar, precio_minimo_venta, moneda, vigente_desde, estado, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,'BOB',NOW(),%s,NOW(),NOW())", (cliente_id, product_id, presentation_id, precio_venta, precio_minimo, precio_activo))
