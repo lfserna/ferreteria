@@ -119,6 +119,38 @@ def resolve_general_codes(cursor, cliente_id, codigo, codigo_barras, exclude_pro
     return codigo, codigo_barras, skipped
 
 
+def find_existing_individual_code(cursor, cliente_id, codes):
+    for code in codes:
+        normalized = normalize_barcode(code)
+        aliases = sorted(barcode_aliases(normalized))
+        placeholders = ",".join(["%s"] * len(aliases))
+        cursor.execute(
+            f"""
+            SELECT pc.codigo, pc.producto_id, p.nombre AS producto
+            FROM producto_codigos pc
+            LEFT JOIN productos p ON p.id=pc.producto_id
+            WHERE pc.cliente_id=%s AND pc.codigo IN ({placeholders})
+            LIMIT 1
+            """,
+            tuple([cliente_id] + aliases),
+        )
+        row = cursor.fetchone()
+        if row:
+            return {"codigo": normalized, "codigo_existente": row["codigo"], "producto_id": row.get("producto_id"), "producto": row.get("producto")}
+    return None
+
+
+def validate_individual_codes_available(cliente_id, codes):
+    if not codes:
+        return
+    ensure_product_codes_table_once()
+    with db_cursor() as cursor:
+        conflict = find_existing_individual_code(cursor, cliente_id, codes)
+    if conflict:
+        product_text = f" en el producto {conflict['producto']}" if conflict.get("producto") else ""
+        raise ValueError(f"Código individual repetido: {conflict['codigo']} ya está registrado{product_text}. No se guardó el producto.")
+
+
 def create_product(cliente_id: int, user_id: int, data: dict):
     nombre = (data.get("nombre") or "").strip()
     codigo = (data.get("codigo_producto") or "").strip() or None
@@ -137,8 +169,7 @@ def create_product(cliente_id: int, user_id: int, data: dict):
     if initial_qty and not location_id:
         raise ValueError("Selecciona una ubicación para la cantidad inicial.")
 
-    if codes:
-        ensure_product_codes_table_once()
+    validate_individual_codes_available(cliente_id, codes)
 
     skipped_codes = []
     skipped_general_codes = []
@@ -228,8 +259,7 @@ def update_product(cliente_id: int, user_id: int, product_id: int, data: dict):
         raise ValueError("Nombre y categoría son obligatorios.")
 
     codes = parse_codes(data.get("codigos_individuales") or "")
-    if codes:
-        ensure_product_codes_table_once()
+    validate_individual_codes_available(cliente_id, codes)
 
     with db_transaction() as (cursor, _connection):
         cursor.execute("SELECT * FROM productos WHERE cliente_id=%s AND id=%s FOR UPDATE", (cliente_id, product_id))
@@ -314,24 +344,20 @@ def insert_product_codes(cursor, cliente_id, product_id, location_id, codes, tip
         )
         existing = cursor.fetchone()
         if existing:
-            skipped.append(normalized)
-            continue
+            raise ValueError(f"Código individual repetido: {normalized} ya está registrado. No se guardó el producto.")
 
         try:
             cursor.execute(
                 """
-                INSERT IGNORE INTO producto_codigos
+                INSERT INTO producto_codigos
                     (cliente_id,producto_id,ubicacion_stock_id,codigo,tipo_codigo,estado,created_at)
                 VALUES (%s,%s,%s,%s,%s,%s,NOW())
                 """,
                 (cliente_id, product_id, location_id, normalized, tipo_codigo, estado),
             )
-            if cursor.rowcount == 1:
-                registered += 1
-            else:
-                skipped.append(normalized)
+            registered += 1
         except IntegrityError:
-            skipped.append(normalized)
+            raise ValueError(f"Código individual repetido: {normalized} ya está registrado. No se guardó el producto.")
 
     return {"registered": registered, "skipped": skipped}
 
