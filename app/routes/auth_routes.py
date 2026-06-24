@@ -23,6 +23,8 @@ def login():
         touch_last_login(user["id"])
         with db_cursor(commit=True) as cursor:
             log_audit(cursor, cliente_id=user["cliente_id"], usuario_id=user["id"], modulo="AUTH", accion="LOGIN", tabla_afectada="usuarios", registro_id=user["id"], valor_nuevo={"estado": "OK"})
+        if user.get("rol_codigo") == "ADMIN_ALMACEN":
+            return redirect(url_for("inventory.index"))
         return redirect(url_for("dashboard.index"))
     return render_template("login.html")
 
