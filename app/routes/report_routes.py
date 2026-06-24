@@ -1,4 +1,4 @@
-from flask import Blueprint, g, render_template, request
+from flask import Blueprint, g, redirect, render_template, request, url_for
 
 from app.database import db_cursor
 from app.utils.security import login_required
@@ -10,6 +10,8 @@ reports_bp = Blueprint("reports", __name__, url_prefix="/reportes")
 @reports_bp.route("")
 @login_required
 def index():
+    if g.user.get("rol_codigo") == "ADMIN_ALMACEN":
+        return redirect(url_for("inventory.index"))
     cliente_id = g.user["cliente_id"]
     fecha_inicio = request.args.get("fecha_inicio", "")
     fecha_fin = request.args.get("fecha_fin", "")
