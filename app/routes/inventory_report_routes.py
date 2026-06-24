@@ -56,16 +56,16 @@ def _movement_condition(tipo):
 
 def _report_rows(cliente_id, start, end, categoria_ids, ubicacion_ids, tipo_movimiento):
     filters = ["p.cliente_id=%s", "p.deleted_at IS NULL"]
-    params = [cliente_id]
+    filter_params = [cliente_id]
     if categoria_ids:
         filters.append(f"p.categoria_id IN ({_placeholders(categoria_ids)})")
-        params.extend(categoria_ids)
+        filter_params.extend(categoria_ids)
     if ubicacion_ids:
         filters.append(f"u.id IN ({_placeholders(ubicacion_ids)})")
-        params.extend(ubicacion_ids)
+        filter_params.extend(ubicacion_ids)
     where = " AND ".join(filters)
     having = _movement_condition(tipo_movimiento)
-    params.extend([start, end, start, end, start, end, start, end])
+    date_params = [start, end, start, end, start, end, start, end]
     with db_cursor() as cursor:
         cursor.execute(
             f"""
@@ -103,7 +103,7 @@ def _report_rows(cliente_id, start, end, categoria_ids, ubicacion_ids, tipo_movi
             {having}
             ORDER BY u.tipo_ubicacion, u.nombre, cat.nombre, p.nombre
             """,
-            tuple(params),
+            tuple(date_params + filter_params),
         )
         return cursor.fetchall()
 
