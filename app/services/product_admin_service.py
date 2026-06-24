@@ -1,5 +1,7 @@
 import re
 
+from mysql.connector.errors import IntegrityError
+
 from app.database import db_cursor, db_transaction
 from app.services.audit_service import log_audit
 from app.services.category_admin_service import estado_value
@@ -78,6 +80,9 @@ def create_product(cliente_id: int, user_id: int, data: dict):
     if initial_qty and not location_id:
         raise ValueError("Selecciona una ubicación para la cantidad inicial.")
     with db_transaction() as (cursor, _connection):
+        if codes:
+            ensure_product_codes_table(cursor)
+            validate_unique_product_codes(cursor, cliente_id, codes)
         producto_activo = estado_value(cursor, "productos", "ACTIVO")
         cursor.execute(
             """
@@ -128,6 +133,8 @@ def update_product(cliente_id: int, user_id: int, product_id: int, data: dict):
             upsert_unit_price(cursor, cliente_id, product_id, data["precio_venta_estandar"], data["precio_minimo_venta"])
         codes = parse_codes(data.get("codigos_individuales") or "")
         if codes:
+            ensure_product_codes_table(cursor)
+            validate_unique_product_codes(cursor, cliente_id, codes)
             insert_product_codes(cursor, cliente_id, product_id, None, codes)
         log_audit(cursor, cliente_id=cliente_id, usuario_id=user_id, modulo="CATALOGO", accion="EDITAR_PRODUCTO", tabla_afectada="productos", registro_id=product_id, valor_anterior=previous, valor_nuevo={"nombre": nombre, "estado": estado, "codigos_agregados": len(codes)})
 
@@ -145,9 +152,45 @@ def add_initial_stock(cursor, cliente_id, product_id, location_id, amount, user_
     return inv_id
 
 
+def ensure_product_codes_table(cursor):
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS producto_codigos (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            cliente_id BIGINT UNSIGNED NOT NULL,
+            producto_id BIGINT UNSIGNED NOT NULL,
+            ubicacion_stock_id BIGINT UNSIGNED NULL,
+            codigo VARCHAR(120) NOT NULL,
+            tipo_codigo ENUM('INTERNO','BARRAS','SERIE') NOT NULL DEFAULT 'INTERNO',
+            estado ENUM('DISPONIBLE','VENDIDO','INACTIVO') NOT NULL DEFAULT 'DISPONIBLE',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NULL,
+            UNIQUE KEY uq_producto_codigo_individual_cliente (cliente_id, codigo),
+            KEY idx_producto_codigos_producto (producto_id),
+            KEY idx_producto_codigos_ubicacion (ubicacion_stock_id)
+        ) ENGINE=InnoDB
+        """
+    )
+
+
+def validate_unique_product_codes(cursor, cliente_id, codes):
+    if not codes:
+        return
+    placeholders = ",".join(["%s"] * len(codes))
+    cursor.execute(f"SELECT codigo FROM producto_codigos WHERE cliente_id=%s AND codigo IN ({placeholders}) LIMIT 1", tuple([cliente_id] + list(codes)))
+    row = cursor.fetchone()
+    if row:
+        raise ValueError(f"El código individual ya existe: {row['codigo']}")
+
+
 def insert_product_codes(cursor, cliente_id, product_id, location_id, codes):
+    ensure_product_codes_table(cursor)
+    estado = estado_value(cursor, "producto_codigos", "DISPONIBLE")
     for code in codes:
-        cursor.execute("INSERT INTO producto_codigos (cliente_id,producto_id,ubicacion_stock_id,codigo,tipo_codigo,estado,created_at) VALUES (%s,%s,%s,%s,'INTERNO','DISPONIBLE',NOW())", (cliente_id, product_id, location_id, code))
+        try:
+            cursor.execute("INSERT INTO producto_codigos (cliente_id,producto_id,ubicacion_stock_id,codigo,tipo_codigo,estado,created_at) VALUES (%s,%s,%s,%s,'INTERNO',%s,NOW())", (cliente_id, product_id, location_id, code, estado))
+        except IntegrityError:
+            raise ValueError(f"El código individual ya existe: {code}")
 
 
 def upsert_unit_price(cursor, cliente_id: int, product_id: int, precio_venta, precio_minimo):
