@@ -1,7 +1,6 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
-import json
 
 from flask import g, jsonify, make_response, render_template, request
 from xhtml2pdf import pisa
@@ -71,11 +70,12 @@ def _report_rows(cliente_id, start, end, categoria_ids, ubicacion_ids, tipo_movi
         filter_params.extend(ubicacion_ids)
     where = " AND ".join(filters)
     having = _movement_condition(tipo_movimiento)
-    date_params = [start, end, start, end, start, end, start, end, start, end]
+    date_params = [start, end, start, end, start, end, start, end]
     with db_cursor() as cursor:
         cursor.execute(
             f"""
             SELECT
+                p.codigo_producto AS codigo,
                 p.nombre AS producto,
                 COALESCE(cat.nombre, '-') AS categoria,
                 COALESCE(u.nombre, '-') AS ubicacion,
@@ -91,11 +91,7 @@ def _report_rows(cliente_id, start, end, categoria_ids, ubicacion_ids, tipo_movi
                     WHEN im.tipo_movimiento IN ('SALIDA','VENTA','TRASPASO') AND im.ubicacion_origen_id = u.id AND DATE(im.created_at) BETWEEN %s AND %s THEN im.cantidad
                     WHEN im.tipo_movimiento = 'AJUSTE_NEGATIVO' AND im.ubicacion_origen_id = u.id AND DATE(im.created_at) BETWEEN %s AND %s THEN im.cantidad
                     ELSE 0
-                END), 0) AS salidas_periodo,
-                MAX(CASE
-                    WHEN (im.ubicacion_origen_id = u.id OR im.ubicacion_destino_id = u.id) AND DATE(im.created_at) BETWEEN %s AND %s THEN im.created_at
-                    ELSE NULL
-                END) AS fecha_movimiento
+                END), 0) AS salidas_periodo
             FROM productos p
             LEFT JOIN categorias_producto cat ON cat.id=p.categoria_id
             LEFT JOIN inventarios i ON i.producto_id=p.id AND i.cliente_id=p.cliente_id
@@ -108,7 +104,7 @@ def _report_rows(cliente_id, start, end, categoria_ids, ubicacion_ids, tipo_movi
             )
             LEFT JOIN inventario_movimientos im ON im.cliente_id=p.cliente_id AND im.producto_id=p.id
             WHERE {where}
-            GROUP BY p.id, cat.nombre, u.id, u.nombre, u.tipo_ubicacion, pr.precio_venta_estandar, i.cantidad_disponible
+            GROUP BY p.id, p.codigo_producto, cat.nombre, u.id, u.nombre, u.tipo_ubicacion, pr.precio_venta_estandar, i.cantidad_disponible
             {having}
             ORDER BY u.tipo_ubicacion, u.nombre, cat.nombre, p.nombre
             """,
@@ -190,43 +186,6 @@ def _report_header_context(cliente_id, ubicacion_ids):
         return context
 
 
-def _ensure_inventory_report_table(cursor):
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS inventario_reportes_generados (
-            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-            cliente_id BIGINT UNSIGNED NOT NULL,
-            usuario_id BIGINT UNSIGNED NOT NULL,
-            numero_reporte VARCHAR(40) NULL UNIQUE,
-            fecha_inicio DATE NOT NULL,
-            fecha_fin DATE NOT NULL,
-            tipo_movimiento VARCHAR(20) NOT NULL,
-            filtros_json JSON NULL,
-            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            INDEX idx_inv_reportes_cliente_fecha (cliente_id, created_at)
-        ) ENGINE=InnoDB
-        """
-    )
-
-
-def _create_report_number(cliente_id, usuario_id, start, end, tipo_movimiento, categoria_ids, ubicacion_ids):
-    filtros = json.dumps({"categoria_ids": categoria_ids, "ubicacion_ids": ubicacion_ids}, ensure_ascii=False)
-    with db_cursor(commit=True) as cursor:
-        _ensure_inventory_report_table(cursor)
-        cursor.execute(
-            """
-            INSERT INTO inventario_reportes_generados
-                (cliente_id, usuario_id, fecha_inicio, fecha_fin, tipo_movimiento, filtros_json, created_at)
-            VALUES (%s,%s,%s,%s,%s,%s,NOW())
-            """,
-            (cliente_id, usuario_id, start, end, tipo_movimiento, filtros),
-        )
-        report_id = cursor.lastrowid
-        report_number = f"REP-{report_id:06d}"
-        cursor.execute("UPDATE inventario_reportes_generados SET numero_reporte=%s WHERE id=%s", (report_number, report_id))
-        return report_number
-
-
 @login_required
 def inventario_reporte_pdf():
     if g.user["rol_codigo"] != "ADMIN_GENERAL_NEGOCIO":
@@ -256,7 +215,7 @@ def inventario_reporte_pdf():
     generated_by = " ".join(
         part for part in [g.user.get("nombres"), g.user.get("apellido_paterno"), g.user.get("apellido_materno")] if part
     ) or g.user.get("username") or "usuario"
-    report_number = _create_report_number(g.user["cliente_id"], g.user["id"], start, end, tipo_movimiento, categoria_ids, ubicacion_ids)
+    report_number = f"REP-{generated_at.strftime('%Y%m%d-%H%M%S')}"
 
     html = render_template(
         "inventory/report_pdf.html",
@@ -276,7 +235,7 @@ def inventario_reporte_pdf():
     status = pisa.CreatePDF(html, dest=pdf_buffer, encoding="UTF-8")
     if status.err:
         return "No se pudo generar el PDF del reporte.", 500
-    filename = f"reporte-inventario-{report_number}.pdf"
+    filename = f"reporte-inventario-{start.isoformat()}-{end.isoformat()}.pdf"
     response = make_response(pdf_buffer.getvalue())
     response.headers["Content-Type"] = "application/pdf"
     response.headers["Content-Disposition"] = f"attachment; filename={filename}"
