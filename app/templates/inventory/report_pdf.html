@@ -89,7 +89,7 @@ p { margin: 1px 0; }
   <table class="report">
     <thead>
       <tr>
-        <th class="code">Cod.</th>
+        <th class="code">Fecha/hora</th>
         <th class="product">Producto</th>
         <th class="category">Categoria</th>
         <th class="location">Almacen/Ubi</th>
@@ -103,7 +103,7 @@ p { margin: 1px 0; }
       {% if rows %}
       {% for row in rows %}
       <tr>
-        <td class="code">{{ row.codigo or '-' }}</td>
+        <td class="code">{% if row.fecha_movimiento %}{{ row.fecha_movimiento.strftime('%d/%m/%Y %H:%M') }}{% else %}-{% endif %}</td>
         <td class="product">{{ row.producto }}<div class="row-sub">Entradas: {{ row.entradas_periodo|int }} &nbsp; Salidas: {{ row.salidas_periodo|int }}</div></td>
         <td class="category">{{ row.categoria }}</td>
         <td class="location">{{ row.ubicacion }}<div class="row-sub">{{ row.tipo_ubicacion }}</div></td>
@@ -134,7 +134,7 @@ p { margin: 1px 0; }
 
   <div class="filters">
     <p><strong>Resumen:</strong> Stock total {{ totals.stock }} · Entradas {{ totals.entradas }} · Salidas {{ totals.salidas }}</p>
-    <p>Este documento se genera directamente en PDF y no crea registros de reporte en el sistema.</p>
+    <p>El número de reporte corresponde al registro interno almacenado en la base de datos.</p>
   </div>
 </div>
 </body>
