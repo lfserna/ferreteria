@@ -9,8 +9,8 @@
         <div>
             <h2>{% if caja_abierta %}Caja abierta{% else %}Caja cerrada{% endif %}</h2>
             {% if caja_abierta %}
-            <small>Inicio efectivo: Bs {{ '%.2f'|format(caja.session.monto_inicial_efectivo) }} · Inicio QR: Bs {{ '%.2f'|format(caja.session.monto_inicial_qr) }}</small>
-            <small>Esperado efectivo: Bs {{ '%.2f'|format(caja.esperado_efectivo) }} · Esperado QR: Bs {{ '%.2f'|format(caja.esperado_qr) }}</small>
+            <small>Inicio efectivo: <span id="cashQuickInitialCash">Bs {{ '%.2f'|format(caja.session.monto_inicial_efectivo) }}</span> · Inicio QR: <span id="cashQuickInitialQr">Bs {{ '%.2f'|format(caja.session.monto_inicial_qr) }}</span></small>
+            <small>Esperado efectivo: <span id="cashQuickExpectedCash">Bs {{ '%.2f'|format(caja.esperado_efectivo) }}</span> · Esperado QR: <span id="cashQuickExpectedQr">Bs {{ '%.2f'|format(caja.esperado_qr) }}</span></small>
             {% else %}
             <small>Debes abrir caja antes de confirmar ventas.</small>
             {% endif %}
@@ -20,13 +20,13 @@
 </section>
 {% endif %}
 
-{% if pending_orders %}
-<section class="panel pending-orders">
+{% if can_confirm %}
+<section class="panel pending-orders" id="pendingOrdersPanel" {% if not pending_orders %}hidden{% endif %}>
     <h2>Pedidos enviados a caja</h2>
     <p class="muted">Puedes cargar uno de estos carritos o ignorarlos y crear una venta nueva.</p>
-    <div class="order-strip">
+    <div class="order-strip" id="pendingOrdersList">
         {% for order in pending_orders %}
-        <article class="order-chip" style="text-align:left;min-width:260px;max-width:360px">
+        <article class="order-chip" data-pending-order="{{ order.id }}" style="text-align:left;min-width:260px;max-width:360px">
             <strong>{{ order.codigo_orden }}</strong>
             <small>{{ order.items }} items · {{ order.vendedor_nombre or 'Sin vendedor' }} · Bs {{ '%.2f'|format(order.total_estimado) }}</small>
             <div style="margin-top:6px">
@@ -67,13 +67,13 @@
     <section class="modal__content" role="dialog" aria-modal="true">
         <header class="modal__header"><div><p class="eyebrow">Cierre de caja</p><h2>Cerrar caja</h2></div><button class="icon-btn" type="button" data-close-modal>×</button></header>
         <div class="checkout-preview">
-            <div class="checkout-row"><span>Inicial efectivo</span><strong>Bs {{ '%.2f'|format(caja.session.monto_inicial_efectivo) }}</strong></div>
-            <div class="checkout-row"><span>Ventas efectivo</span><strong>Bs {{ '%.2f'|format(caja.ventas_efectivo) }}</strong></div>
-            <div class="checkout-row"><span>Esperado efectivo</span><strong>Bs {{ '%.2f'|format(caja.esperado_efectivo) }}</strong></div>
+            <div class="checkout-row"><span>Inicial efectivo</span><strong id="cashCloseInitialCash">Bs {{ '%.2f'|format(caja.session.monto_inicial_efectivo) }}</strong></div>
+            <div class="checkout-row"><span>Ventas efectivo</span><strong id="cashCloseSalesCash">Bs {{ '%.2f'|format(caja.ventas_efectivo) }}</strong></div>
+            <div class="checkout-row"><span>Esperado efectivo</span><strong id="cashCloseExpectedCash">Bs {{ '%.2f'|format(caja.esperado_efectivo) }}</strong></div>
             <hr>
-            <div class="checkout-row"><span>Inicial QR</span><strong>Bs {{ '%.2f'|format(caja.session.monto_inicial_qr) }}</strong></div>
-            <div class="checkout-row"><span>Ventas QR</span><strong>Bs {{ '%.2f'|format(caja.ventas_qr) }}</strong></div>
-            <div class="checkout-row"><span>Esperado QR</span><strong>Bs {{ '%.2f'|format(caja.esperado_qr) }}</strong></div>
+            <div class="checkout-row"><span>Inicial QR</span><strong id="cashCloseInitialQr">Bs {{ '%.2f'|format(caja.session.monto_inicial_qr) }}</strong></div>
+            <div class="checkout-row"><span>Ventas QR</span><strong id="cashCloseSalesQr">Bs {{ '%.2f'|format(caja.ventas_qr) }}</strong></div>
+            <div class="checkout-row"><span>Esperado QR</span><strong id="cashCloseExpectedQr">Bs {{ '%.2f'|format(caja.esperado_qr) }}</strong></div>
         </div>
         <form class="form-stack" method="post" action="{{ url_for('sales.cerrar_caja') }}" id="cashCloseForm" data-expected-cash="{{ '%.2f'|format(caja.esperado_efectivo) }}" data-expected-qr="{{ '%.2f'|format(caja.esperado_qr) }}">
             <p class="page-note">Los montos finales son editables. Si no coinciden con el esperado, el sistema guardará la diferencia positiva o negativa.</p>
@@ -125,9 +125,13 @@ function bindCashCloseDifference(){
     if(diffQr)diffQr.textContent=fmt(dq);
     if(diffTotal)diffTotal.textContent=fmt(dc+dq);
   };
+  cash?.removeEventListener?.('input',cash.__cashDiffRender||(()=>{}));
+  qr?.removeEventListener?.('input',qr.__cashDiffRender||(()=>{}));
+  cash&&(cash.__cashDiffRender=render);
+  qr&&(qr.__cashDiffRender=render);
   cash?.addEventListener('input',render);
   qr?.addEventListener('input',render);
   render();
 }
 document.addEventListener('DOMContentLoaded',bindCashCloseDifference);
-</script><script src="{{ url_for('static', filename='js/sales.js') }}?v=20260625-4"></script>{% endblock %}
+</script><script src="{{ url_for('static', filename='js/sales.js') }}?v=20260625-5"></script>{% endblock %}
