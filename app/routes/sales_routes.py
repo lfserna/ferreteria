@@ -1,8 +1,9 @@
 from io import BytesIO
 
-from flask import Blueprint, g, jsonify, make_response, redirect, render_template, request, url_for
+from flask import Blueprint, flash, g, jsonify, make_response, redirect, render_template, request, url_for
 from xhtml2pdf import pisa
 
+from app.services.cash_service import cash_summary, close_cash_session, open_cash_session, require_open_cash
 from app.services.context_service import get_primary_stock_location
 from app.services.product_service import search_products
 from app.services.sales_service import confirm_sale_from_cart, create_order_from_cart, get_order, get_sale_receipt, list_pending_orders
@@ -12,10 +13,19 @@ from app.utils.serializers import to_jsonable
 
 sales_bp = Blueprint("sales", __name__, url_prefix="/ventas")
 SALES_ROLES = {"ADMIN_GENERAL_NEGOCIO", "ADMIN_TIENDA", "CAJERO", "VENDEDOR"}
+CASH_REQUIRED_ROLES = {"ADMIN_GENERAL_NEGOCIO", "ADMIN_TIENDA", "CAJERO"}
 
 
 def can_access_sales():
     return g.user and g.user.get("rol_codigo") in SALES_ROLES
+
+
+def can_confirm_sales():
+    return g.user["rol_codigo"] in CASH_REQUIRED_ROLES
+
+
+def current_stock_location():
+    return get_primary_stock_location(g.user["cliente_id"], g.user.get("sucursal_id"), g.user.get("almacen_id"))
 
 
 @sales_bp.route("")
@@ -23,10 +33,59 @@ def can_access_sales():
 def index():
     if not can_access_sales():
         return redirect(url_for("inventory.index"))
-    can_confirm = g.user["rol_codigo"] in {"ADMIN_GENERAL_NEGOCIO", "ADMIN_TIENDA", "CAJERO"}
-    can_send_order = g.user["rol_codigo"] in {"VENDEDOR", "ADMIN_TIENDA", "CAJERO"}
+    ubicacion_stock_id = current_stock_location()
+    can_confirm = can_confirm_sales()
+    can_send_order = g.user["rol_codigo"] in {"VENDEDOR", "ADMIN_TIENDA"}
     pending_orders = list_pending_orders(g.user["cliente_id"], g.user.get("sucursal_id")) if can_confirm else []
-    return render_template("sales/index.html", can_confirm=can_confirm, can_send_order=can_send_order, pending_orders=pending_orders)
+    caja = cash_summary(g.user["cliente_id"], g.user["id"], ubicacion_stock_id) if can_confirm else None
+    return render_template("sales/index.html", can_confirm=can_confirm, can_send_order=can_send_order, pending_orders=pending_orders,
+                           caja=caja, caja_abierta=bool(caja), requiere_caja=can_confirm, ubicacion_stock_id=ubicacion_stock_id)
+
+
+@sales_bp.route("/caja/abrir", methods=["POST"])
+@login_required
+def abrir_caja():
+    if not can_confirm_sales():
+        flash("Tu rol no requiere apertura de caja.", "danger")
+        return redirect(url_for("sales.index"))
+    ubicacion_stock_id = current_stock_location()
+    if not ubicacion_stock_id:
+        flash("El usuario no tiene una ubicación de stock configurada.", "danger")
+        return redirect(url_for("sales.index"))
+    try:
+        open_cash_session(
+            g.user["cliente_id"],
+            g.user["id"],
+            ubicacion_stock_id,
+            request.form.get("monto_inicial_efectivo"),
+            request.form.get("monto_inicial_qr"),
+            request.form.get("observacion"),
+        )
+        flash("Caja abierta correctamente. Ya puedes realizar ventas.", "success")
+    except ValueError as exc:
+        flash(str(exc), "danger")
+    return redirect(url_for("sales.index"))
+
+
+@sales_bp.route("/caja/cerrar", methods=["POST"])
+@login_required
+def cerrar_caja():
+    if not can_confirm_sales():
+        flash("Tu rol no puede cerrar caja.", "danger")
+        return redirect(url_for("sales.index"))
+    try:
+        close_cash_session(
+            g.user["cliente_id"],
+            g.user["id"],
+            current_stock_location(),
+            request.form.get("monto_final_efectivo"),
+            request.form.get("monto_final_qr"),
+            request.form.get("observacion"),
+        )
+        flash("Caja cerrada correctamente.", "success")
+    except ValueError as exc:
+        flash(str(exc), "danger")
+    return redirect(url_for("sales.index"))
 
 
 @sales_bp.route("/api/productos")
@@ -34,7 +93,7 @@ def index():
 def api_productos():
     if not can_access_sales():
         return jsonify({"error": "Tu rol no tiene acceso a ventas."}), 403
-    products = search_products(g.user["cliente_id"], request.args.get("q", ""), limit=40)
+    products = search_products(g.user["cliente_id"], request.args.get("q", ""), limit=40, ubicacion_stock_id=current_stock_location())
     return jsonify(to_jsonable(products))
 
 
@@ -52,10 +111,10 @@ def api_orden(orden_id):
 @sales_bp.route("/ordenes/enviar-caja", methods=["POST"])
 @login_required
 def enviar_caja():
-    if g.user["rol_codigo"] not in {"VENDEDOR", "ADMIN_TIENDA", "CAJERO"}:
+    if g.user["rol_codigo"] not in {"VENDEDOR", "ADMIN_TIENDA"}:
         return jsonify({"error": "Tu rol no puede enviar órdenes a caja."}), 403
     payload = request.get_json(silent=True) or {}
-    ubicacion_stock_id = get_primary_stock_location(g.user["cliente_id"], g.user.get("sucursal_id"), g.user.get("almacen_id"))
+    ubicacion_stock_id = current_stock_location()
     if not ubicacion_stock_id:
         return jsonify({"error": "El usuario no tiene una ubicación de stock configurada."}), 400
     try:
@@ -69,13 +128,14 @@ def enviar_caja():
 @sales_bp.route("/confirmar", methods=["POST"])
 @login_required
 def confirmar():
-    if g.user["rol_codigo"] not in {"ADMIN_GENERAL_NEGOCIO", "ADMIN_TIENDA", "CAJERO"}:
+    if not can_confirm_sales():
         return jsonify({"error": "Tu rol no puede confirmar cobros."}), 403
     payload = request.get_json(silent=True) or {}
-    ubicacion_stock_id = get_primary_stock_location(g.user["cliente_id"], g.user.get("sucursal_id"), g.user.get("almacen_id"))
+    ubicacion_stock_id = current_stock_location()
     if not ubicacion_stock_id:
         return jsonify({"error": "El usuario no tiene una ubicación de stock configurada."}), 400
     try:
+        require_open_cash(g.user["cliente_id"], g.user["id"], ubicacion_stock_id)
         result = confirm_sale_from_cart(cliente_id=g.user["cliente_id"], sucursal_id=g.user.get("sucursal_id"), ubicacion_stock_id=ubicacion_stock_id,
                                         cajero_id=g.user["id"], vendedor_id=None, created_by=g.user["id"], items=payload.get("items", []),
                                         metodo_pago=payload.get("metodo_pago"), idempotency_key=payload.get("idempotency_key"), orden_id=payload.get("orden_id"))
