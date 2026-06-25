@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal
 
 from app.database import db_cursor, db_transaction
@@ -30,9 +31,13 @@ def nonnegative_whole_units(value, field_name="cantidad"):
     return int(decimal_value)
 
 
-def table_columns(cursor, table_name):
+def column_info(cursor, table_name):
     cursor.execute(f"SHOW COLUMNS FROM {table_name}")
-    return {row["Field"] for row in cursor.fetchall()}
+    return {row["Field"]: row for row in cursor.fetchall()}
+
+
+def table_columns(cursor, table_name):
+    return set(column_info(cursor, table_name).keys())
 
 
 def index_exists(cursor, table_name, index_name):
@@ -48,6 +53,31 @@ def index_exists(cursor, table_name, index_name):
     )
     row = cursor.fetchone() or {}
     return int(row.get("total") or 0) > 0
+
+
+def enum_options(column_type):
+    text = str(column_type or "")
+    match = re.match(r"enum\((.*)\)", text, flags=re.IGNORECASE)
+    if not match:
+        return []
+    return [value.replace("''", "'") for value in re.findall(r"'((?:[^']|'')*)'", match.group(1))]
+
+
+def enum_value_for_column(cursor, table_name, column_name, preferred_values):
+    info = column_info(cursor, table_name).get(column_name)
+    if not info:
+        return None
+    options = enum_options(info.get("Type"))
+    if not options:
+        return preferred_values[0] if preferred_values else None
+    normalized = {option.upper(): option for option in options}
+    for value in preferred_values:
+        if value.upper() in normalized:
+            return normalized[value.upper()]
+    default_value = info.get("Default")
+    if default_value in options:
+        return default_value
+    return options[0] if options else None
 
 
 def ensure_sales_schema():
@@ -182,6 +212,27 @@ def create_order_from_cart(*, cliente_id, sucursal_id, ubicacion_stock_id, vende
         return {"order_id": order_id, "total": str(total)}
 
 
+def insert_payment(cursor, cliente_id, venta_id, metodo_pago, total):
+    columns = table_columns(cursor, "venta_pagos")
+    estado_value = enum_value_for_column(cursor, "venta_pagos", "estado", ["CONFIRMADO", "PAGADO", "PAGADA", "COMPLETADO", "ACTIVO"])
+    if "estado" in columns and estado_value:
+        cursor.execute(
+            """
+            INSERT INTO venta_pagos (cliente_id, venta_id, metodo_pago, monto, estado, created_at)
+            VALUES (%s,%s,%s,%s,%s,NOW())
+            """,
+            (cliente_id, venta_id, metodo_pago, total, estado_value),
+        )
+    else:
+        cursor.execute(
+            """
+            INSERT INTO venta_pagos (cliente_id, venta_id, metodo_pago, monto, created_at)
+            VALUES (%s,%s,%s,%s,NOW())
+            """,
+            (cliente_id, venta_id, metodo_pago, total),
+        )
+
+
 def confirm_sale_from_cart(*, cliente_id, sucursal_id, ubicacion_stock_id, cajero_id, vendedor_id,
                            created_by, items, metodo_pago, idempotency_key, orden_id=None):
     if metodo_pago not in PAYMENT_METHODS:
@@ -242,7 +293,7 @@ def confirm_sale_from_cart(*, cliente_id, sucursal_id, ubicacion_stock_id, cajer
                 """,
                 (cliente_id, item["producto_id"], ubicacion_stock_id, item["cantidad_base"], venta_id, cajero_id, f"Venta de {item['cantidad']} {item['presentacion_nombre']}"),
             )
-        cursor.execute("INSERT INTO venta_pagos (cliente_id, venta_id, metodo_pago, monto, estado, created_at) VALUES (%s,%s,%s,%s,'CONFIRMADO',NOW())", (cliente_id, venta_id, metodo_pago, total))
+        insert_payment(cursor, cliente_id, venta_id, metodo_pago, total)
         cursor.execute("UPDATE ordenes_venta SET estado='FACTURADA', cajero_id=%s, updated_at=NOW() WHERE id=%s", (cajero_id, orden_id))
         log_audit(cursor, cliente_id=cliente_id, usuario_id=created_by, modulo="VENTAS", accion="CONFIRMAR_VENTA", tabla_afectada="ventas", registro_id=venta_id, valor_nuevo={"total": total, "metodo_pago": metodo_pago})
         cursor.execute("SELECT numero_venta FROM ventas WHERE id=%s", (venta_id,))
@@ -309,8 +360,15 @@ def discount_stock(cursor, cliente_id, ubicacion_stock_id, item):
     inv = cursor.fetchone()
     if not inv:
         raise ValueError(f"No existe stock configurado para {item['producto_nombre']} en esta ubicación.")
-    stock_disponible = nonnegative_whole_units(inv["cantidad_disponible"], "stock disponible")
-    cantidad_solicitada = nonnegative_whole_units(item["cantidad_base"], "cantidad solicitada")
+    try:
+        stock_decimal = Decimal(str(inv.get("cantidad_disponible") or "0"))
+        requested_decimal = Decimal(str(item.get("cantidad_base") or "0"))
+    except Exception as exc:
+        raise ValueError(f"Stock inválido para {item['producto_nombre']}.") from exc
+    if requested_decimal <= 0:
+        raise ValueError(f"Cantidad inválida para {item['producto_nombre']}.")
+    stock_disponible = int(stock_decimal) if stock_decimal == stock_decimal.to_integral_value() else int(stock_decimal.to_integral_value(rounding='ROUND_FLOOR'))
+    cantidad_solicitada = int(requested_decimal) if requested_decimal == requested_decimal.to_integral_value() else int(requested_decimal.to_integral_value(rounding='ROUND_CEILING'))
     if stock_disponible < cantidad_solicitada:
         raise ValueError(f"Stock insuficiente para {item['producto_nombre']}. Disponible: {stock_disponible}. Solicitado: {cantidad_solicitada}.")
     cursor.execute("UPDATE inventarios SET cantidad_disponible = cantidad_disponible - %s, updated_at = NOW() WHERE id = %s", (cantidad_solicitada, inv["id"]))
