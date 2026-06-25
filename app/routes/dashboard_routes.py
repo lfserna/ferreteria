@@ -1,6 +1,11 @@
-from flask import Blueprint, g, redirect, render_template, url_for
+from datetime import date, datetime, timedelta
+from io import BytesIO
+
+from flask import Blueprint, g, make_response, redirect, render_template, request, url_for
+from xhtml2pdf import pisa
 
 from app.database import db_cursor
+from app.services.cash_service import ensure_cash_tables
 from app.utils.security import login_required
 
 
@@ -9,6 +14,25 @@ dashboard_bp = Blueprint("dashboard", __name__)
 
 def role_code():
     return g.user.get("rol_codigo")
+
+
+def user_full_name(user=None):
+    user = user or g.user
+    parts = [user.get("nombres"), user.get("apellido_paterno")]
+    name = " ".join([part for part in parts if part])
+    return name or user.get("username") or "-"
+
+
+def table_columns(cursor, table_name):
+    cursor.execute(f"SHOW COLUMNS FROM {table_name}")
+    return {row["Field"] for row in cursor.fetchall()}
+
+
+def coalesce_existing(cols, candidates, fallback="NULL"):
+    existing = [candidate for candidate in candidates if candidate in cols]
+    if not existing:
+        return fallback
+    return f"COALESCE({', '.join(existing)})" if len(existing) > 1 else existing[0]
 
 
 def sales_scope_clause(alias="v"):
@@ -108,6 +132,136 @@ def list_open_cash_sessions(cursor):
     return cursor.fetchall()
 
 
+def list_dashboard_sucursales(cursor):
+    role = role_code()
+    params = [g.user["cliente_id"]]
+    where = "cliente_id=%s"
+    if role == "ADMIN_TIENDA":
+        where += " AND id=%s"
+        params.append(g.user.get("sucursal_id"))
+    cursor.execute(f"SELECT id, nombre FROM sucursales WHERE {where} ORDER BY nombre", tuple(params))
+    return cursor.fetchall()
+
+
+def list_dashboard_cashiers(cursor):
+    role = role_code()
+    params = [g.user["cliente_id"]]
+    store_filter = ""
+    if role == "ADMIN_TIENDA":
+        store_filter = "AND (u.sucursal_id=%s OR ur.sucursal_id=%s)"
+        params.extend([g.user.get("sucursal_id"), g.user.get("sucursal_id")])
+    cursor.execute(
+        f"""
+        SELECT DISTINCT u.id, u.username, u.nombres, u.apellido_paterno
+        FROM usuarios u
+        JOIN usuario_roles ur ON ur.usuario_id=u.id AND ur.cliente_id=u.cliente_id AND ur.estado='ACTIVO'
+        JOIN roles r ON r.id=ur.rol_id AND r.estado='ACTIVO'
+        WHERE u.cliente_id=%s
+          AND u.estado='ACTIVO'
+          AND r.codigo IN ('CAJERO','ADMIN_TIENDA')
+          {store_filter}
+        ORDER BY u.nombres, u.apellido_paterno, u.username
+        """,
+        tuple(params),
+    )
+    rows = cursor.fetchall()
+    for row in rows:
+        row["nombre_visible"] = user_full_name(row)
+    return rows
+
+
+def resolve_period(args):
+    today = date.today()
+    period = (args.get("periodo") or "DIA").upper()
+    if period == "SEMANA":
+        start = today - timedelta(days=6)
+        end = today
+    elif period == "MES":
+        start = today.replace(day=1)
+        end = today
+    elif period == "TRES_MESES":
+        start = today - timedelta(days=89)
+        end = today
+    elif period == "RANGO":
+        try:
+            start = datetime.strptime(args.get("fecha_inicio") or "", "%Y-%m-%d").date()
+            end = datetime.strptime(args.get("fecha_fin") or "", "%Y-%m-%d").date()
+        except ValueError:
+            start = today
+            end = today
+        if end < start:
+            start, end = end, start
+    else:
+        period = "DIA"
+        start = today
+        end = today
+    return period, start, end
+
+
+def cash_history_report_rows(cursor, start, end, sucursal_id=None, cajero_id=None):
+    ensure_cash_tables()
+    cols = table_columns(cursor, "caja_sesiones")
+    opened_expr = coalesce_existing(cols, ["cs.abierta_at", "cs.fecha_apertura", "cs.created_at"], "cs.created_at")
+    closed_expr = coalesce_existing(cols, ["cs.cerrada_at", "cs.fecha_cierre", "cs.updated_at"], "cs.updated_at")
+    cash_user_expr = "COALESCE(cs.usuario_id, cs.usuario_apertura_id)" if "usuario_apertura_id" in cols else "cs.usuario_id"
+    cash_location_expr = "cs.ubicacion_stock_id" if "ubicacion_stock_id" in cols else "NULL"
+    initial_cash_expr = "COALESCE(cs.monto_inicial_efectivo, cs.monto_inicial, 0)" if "monto_inicial" in cols else "COALESCE(cs.monto_inicial_efectivo, 0)"
+    initial_qr_expr = "COALESCE(cs.monto_inicial_qr, 0)" if "monto_inicial_qr" in cols else "0"
+    final_cash_expr = "COALESCE(cs.monto_final_efectivo, 0)" if "monto_final_efectivo" in cols else "0"
+    final_qr_expr = "COALESCE(cs.monto_final_qr, 0)" if "monto_final_qr" in cols else "0"
+    diff_expr = "COALESCE(cs.diferencia, 0)" if "diferencia" in cols else f"(({final_cash_expr}) + ({final_qr_expr}) - COALESCE(cs.monto_final_sistema, 0))"
+
+    params = [g.user["cliente_id"], start, end + timedelta(days=1)]
+    filters = [f"cs.cliente_id=%s", f"{opened_expr} >= %s", f"{opened_expr} < %s"]
+    role = role_code()
+    if role == "ADMIN_TIENDA":
+        filters.append("(us.sucursal_id=%s OR caj.sucursal_id=%s)")
+        params.extend([g.user.get("sucursal_id"), g.user.get("sucursal_id")])
+    if sucursal_id:
+        filters.append("(us.sucursal_id=%s OR caj.sucursal_id=%s)")
+        params.extend([sucursal_id, sucursal_id])
+    if cajero_id:
+        filters.append(f"{cash_user_expr}=%s")
+        params.append(cajero_id)
+
+    cursor.execute(
+        f"""
+        SELECT
+            cs.id AS numero_caja,
+            COALESCE(s.nombre, suc_caj.nombre, 'Sin sucursal') AS sucursal,
+            {cash_user_expr} AS cajero_id,
+            COALESCE(CONCAT_WS(' ', caj.nombres, caj.apellido_paterno), caj.username) AS cajero,
+            {opened_expr} AS abierto,
+            {closed_expr} AS cerrado,
+            {initial_cash_expr} AS apertura_efectivo,
+            {initial_qr_expr} AS apertura_qr,
+            {final_cash_expr} AS cierre_efectivo,
+            {final_qr_expr} AS cierre_qr,
+            {diff_expr} AS diferencia,
+            COALESCE((
+                SELECT SUM(vp.monto)
+                FROM ventas v
+                JOIN venta_pagos vp ON vp.venta_id=v.id AND vp.cliente_id=v.cliente_id
+                WHERE v.cliente_id=cs.cliente_id
+                  AND v.cajero_id={cash_user_expr}
+                  AND v.estado='PAGADA'
+                  AND v.fecha_venta >= {opened_expr}
+                  AND ({cash_location_expr} IS NULL OR v.ubicacion_stock_id={cash_location_expr})
+                  AND ({closed_expr} IS NULL OR v.fecha_venta <= {closed_expr})
+            ), 0) AS total_recaudado
+        FROM caja_sesiones cs
+        LEFT JOIN usuarios caj ON caj.id={cash_user_expr}
+        LEFT JOIN ubicaciones_stock us ON us.id={cash_location_expr}
+        LEFT JOIN sucursales s ON s.id=us.sucursal_id
+        LEFT JOIN sucursales suc_caj ON suc_caj.id=caj.sucursal_id
+        WHERE {' AND '.join(filters)}
+        ORDER BY {opened_expr} DESC, cs.id DESC
+        """,
+        tuple(params),
+    )
+    return cursor.fetchall()
+
+
 @dashboard_bp.route("/")
 @login_required
 def index():
@@ -168,6 +322,8 @@ def index():
         )
         ultimas_ventas = cursor.fetchall()
         cajas_abiertas = list_open_cash_sessions(cursor)
+        sucursales_reporte = list_dashboard_sucursales(cursor) if role in {"ADMIN_GENERAL_NEGOCIO", "ADMIN_TIENDA"} else []
+        cajeros_reporte = list_dashboard_cashiers(cursor) if role in {"ADMIN_GENERAL_NEGOCIO", "ADMIN_TIENDA"} else []
     return render_template(
         "dashboard.html",
         productos=productos,
@@ -179,4 +335,54 @@ def index():
         cajas_abiertas=cajas_abiertas,
         can_create_sale=can_create_sale,
         role=role,
+        sucursales_reporte=sucursales_reporte,
+        cajeros_reporte=cajeros_reporte,
     )
+
+
+@dashboard_bp.route("/cajas/historial/pdf")
+@login_required
+def cash_history_pdf():
+    if role_code() not in {"ADMIN_GENERAL_NEGOCIO", "ADMIN_TIENDA"}:
+        return redirect(url_for("dashboard.index"))
+    period, start, end = resolve_period(request.args)
+    sucursal_id = int(request.args.get("sucursal_id") or 0) or None
+    cajero_id = int(request.args.get("cajero_id") or 0) or None
+    if role_code() == "ADMIN_TIENDA":
+        if sucursal_id and sucursal_id != g.user.get("sucursal_id"):
+            sucursal_id = g.user.get("sucursal_id")
+    with db_cursor() as cursor:
+        rows = cash_history_report_rows(cursor, start, end, sucursal_id=sucursal_id, cajero_id=cajero_id)
+        sucursales = list_dashboard_sucursales(cursor)
+        cajeros = list_dashboard_cashiers(cursor)
+    sucursal_name = next((s["nombre"] for s in sucursales if sucursal_id and int(s["id"]) == int(sucursal_id)), "Todas" if role_code() == "ADMIN_GENERAL_NEGOCIO" else (g.user.get("sucursal_nombre") or "Mi tienda"))
+    cajero_name = next((c["nombre_visible"] for c in cajeros if cajero_id and int(c["id"]) == int(cajero_id)), "Todos")
+    totals = {
+        "apertura_efectivo": sum((r.get("apertura_efectivo") or 0) for r in rows),
+        "apertura_qr": sum((r.get("apertura_qr") or 0) for r in rows),
+        "cierre_efectivo": sum((r.get("cierre_efectivo") or 0) for r in rows),
+        "cierre_qr": sum((r.get("cierre_qr") or 0) for r in rows),
+        "diferencia": sum((r.get("diferencia") or 0) for r in rows),
+        "total_recaudado": sum((r.get("total_recaudado") or 0) for r in rows),
+    }
+    html = render_template(
+        "reports/cash_history_pdf.html",
+        rows=rows,
+        totals=totals,
+        periodo=period,
+        fecha_inicio=start,
+        fecha_fin=end,
+        generado_en=datetime.now(),
+        generado_por=user_full_name(),
+        cliente=g.user.get("cliente_nombre"),
+        sucursal_name=sucursal_name,
+        cajero_name=cajero_name,
+    )
+    pdf_buffer = BytesIO()
+    status = pisa.CreatePDF(html, dest=pdf_buffer, encoding="UTF-8")
+    if status.err:
+        return "No se pudo generar el PDF del historial de cajas.", 500
+    response = make_response(pdf_buffer.getvalue())
+    response.headers["Content-Type"] = "application/pdf"
+    response.headers["Content-Disposition"] = f"attachment; filename=historial-cajas-{start.isoformat()}-{end.isoformat()}.pdf"
+    return response
