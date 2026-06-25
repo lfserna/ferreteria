@@ -36,6 +36,47 @@ def ensure_cash_tables():
             ) ENGINE=InnoDB
             """
         )
+        migrate_cash_session_table(cursor)
+
+
+def existing_columns(cursor, table_name):
+    cursor.execute(f"SHOW COLUMNS FROM {table_name}")
+    return {row["Field"] for row in cursor.fetchall()}
+
+
+def add_column_if_missing(cursor, columns, name, definition):
+    if name not in columns:
+        cursor.execute(f"ALTER TABLE caja_sesiones ADD COLUMN {name} {definition}")
+        columns.add(name)
+
+
+def add_index_if_missing(cursor, index_name, definition):
+    cursor.execute("SHOW INDEX FROM caja_sesiones WHERE Key_name=%s", (index_name,))
+    if not cursor.fetchone():
+        cursor.execute(f"ALTER TABLE caja_sesiones ADD INDEX {index_name} {definition}")
+
+
+def migrate_cash_session_table(cursor):
+    columns = existing_columns(cursor, "caja_sesiones")
+    add_column_if_missing(cursor, columns, "cliente_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1")
+    add_column_if_missing(cursor, columns, "usuario_id", "BIGINT UNSIGNED NOT NULL DEFAULT 0")
+    add_column_if_missing(cursor, columns, "ubicacion_stock_id", "BIGINT UNSIGNED NULL")
+    add_column_if_missing(cursor, columns, "fecha_operacion", "DATE NOT NULL DEFAULT (CURRENT_DATE)")
+    add_column_if_missing(cursor, columns, "estado", "ENUM('ABIERTA','CERRADA') NOT NULL DEFAULT 'ABIERTA'")
+    add_column_if_missing(cursor, columns, "monto_inicial_efectivo", "DECIMAL(12,2) NOT NULL DEFAULT 0")
+    add_column_if_missing(cursor, columns, "monto_inicial_qr", "DECIMAL(12,2) NOT NULL DEFAULT 0")
+    add_column_if_missing(cursor, columns, "monto_esperado_efectivo", "DECIMAL(12,2) NULL")
+    add_column_if_missing(cursor, columns, "monto_esperado_qr", "DECIMAL(12,2) NULL")
+    add_column_if_missing(cursor, columns, "monto_final_efectivo", "DECIMAL(12,2) NULL")
+    add_column_if_missing(cursor, columns, "monto_final_qr", "DECIMAL(12,2) NULL")
+    add_column_if_missing(cursor, columns, "abierta_at", "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP")
+    add_column_if_missing(cursor, columns, "cerrada_at", "DATETIME NULL")
+    add_column_if_missing(cursor, columns, "observacion_apertura", "TEXT NULL")
+    add_column_if_missing(cursor, columns, "observacion_cierre", "TEXT NULL")
+    add_column_if_missing(cursor, columns, "created_at", "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP")
+    add_column_if_missing(cursor, columns, "updated_at", "DATETIME NULL")
+    add_index_if_missing(cursor, "idx_caja_sesion_abierta", "(cliente_id, usuario_id, estado)")
+    add_index_if_missing(cursor, "idx_caja_sesion_fecha", "(cliente_id, fecha_operacion)")
 
 
 def get_open_cash_session(cliente_id, usuario_id, ubicacion_stock_id=None):
