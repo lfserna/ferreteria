@@ -19,8 +19,8 @@ from app.utils.serializers import to_jsonable
 
 
 sales_bp = Blueprint("sales", __name__, url_prefix="/ventas")
-SALES_ROLES = {"ADMIN_GENERAL_NEGOCIO", "ADMIN_TIENDA", "CAJERO", "VENDEDOR"}
-CASH_REQUIRED_ROLES = {"ADMIN_GENERAL_NEGOCIO", "ADMIN_TIENDA", "CAJERO"}
+SALES_ROLES = {"ADMIN_TIENDA", "CAJERO", "VENDEDOR"}
+CASH_REQUIRED_ROLES = {"ADMIN_TIENDA", "CAJERO"}
 
 
 def can_access_sales():
@@ -55,7 +55,7 @@ def selected_seller_id_from_payload(payload):
 @login_required
 def index():
     if not can_access_sales():
-        return redirect(url_for("inventory.index"))
+        return redirect(url_for("dashboard.index"))
     ubicacion_stock_id = current_stock_location()
     can_confirm = can_confirm_sales()
     can_send_order = g.user["rol_codigo"] in {"VENDEDOR", "ADMIN_TIENDA"}
@@ -184,7 +184,7 @@ def confirmar():
 @sales_bp.route("/<int:venta_id>/comprobante")
 @login_required
 def comprobante(venta_id):
-    if not can_access_sales():
+    if not g.user or g.user.get("rol_codigo") == "ADMIN_ALMACEN":
         return redirect(url_for("inventory.index"))
     receipt = get_sale_receipt(g.user["cliente_id"], venta_id)
     if not receipt:
@@ -195,7 +195,7 @@ def comprobante(venta_id):
 @sales_bp.route("/<int:venta_id>/comprobante-pdf")
 @login_required
 def comprobante_pdf(venta_id):
-    if not can_access_sales():
+    if not g.user or g.user.get("rol_codigo") == "ADMIN_ALMACEN":
         return redirect(url_for("inventory.index"))
     receipt = get_sale_receipt(g.user["cliente_id"], venta_id)
     if not receipt:
