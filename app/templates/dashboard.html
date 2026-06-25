@@ -39,8 +39,10 @@
     </div>
 </section>
 {% endif %}
-<section class="grid-two">
+<section class="{% if role == 'VENDEDOR' %}panel{% else %}grid-two{% endif %}">
+    {% if role != 'VENDEDOR' %}
     <article class="panel"><h2>Alertas activas</h2>{% if alertas %}<div class="stack-list">{% for alerta in alertas %}<div class="list-item"><strong>{{ alerta.titulo }}</strong><p>{{ alerta.mensaje }}</p><small>{{ alerta.prioridad }}</small></div>{% endfor %}</div>{% else %}<p class="empty">No hay alertas activas.</p>{% endif %}</article>
-    <article class="panel"><h2>{% if role == 'VENDEDOR' %}Mis últimas ventas{% elif role == 'CAJERO' %}Mis últimos cobros{% elif role == 'ADMIN_TIENDA' %}Últimas ventas de tienda{% else %}Últimas ventas{% endif %}</h2><div class="responsive-table"><table><thead><tr><th>Comprobante</th><th>Sucursal</th><th>Cajero</th><th>Vendedor</th><th>Total</th></tr></thead><tbody>{% for venta in ultimas_ventas %}<tr><td><a href="{{ url_for('sales.comprobante', venta_id=venta.id) }}">{% if venta.numero_comprobante %}{{ '%06d'|format(venta.numero_comprobante) }}{% else %}{{ venta.numero_venta }}{% endif %}</a></td><td>{{ venta.sucursal or '-' }}</td><td>{{ venta.cajero or '-' }}</td><td>{{ venta.vendedor or '-' }}</td><td>Bs {{ '%.2f'|format(venta.total) }}</td></tr>{% else %}<tr><td colspan="5">Sin ventas registradas.</td></tr>{% endfor %}</tbody></table></div></article>
+    {% endif %}
+    <article class="{% if role != 'VENDEDOR' %}panel{% endif %}"><h2>{% if role == 'VENDEDOR' %}Mis últimas ventas{% elif role == 'CAJERO' %}Mis últimos cobros{% elif role == 'ADMIN_TIENDA' %}Últimas ventas de tienda{% else %}Últimas ventas{% endif %}</h2><div class="responsive-table"><table><thead><tr><th>Comprobante</th><th>Sucursal</th><th>Cajero</th><th>Vendedor</th><th>Total</th></tr></thead><tbody>{% for venta in ultimas_ventas %}<tr><td><a href="{{ url_for('sales.comprobante', venta_id=venta.id) }}">{% if venta.numero_comprobante %}{{ '%06d'|format(venta.numero_comprobante) }}{% else %}{{ venta.numero_venta }}{% endif %}</a></td><td>{{ venta.sucursal or '-' }}</td><td>{{ venta.cajero or '-' }}</td><td>{{ venta.vendedor or '-' }}</td><td>Bs {{ '%.2f'|format(venta.total) }}</td></tr>{% else %}<tr><td colspan="5">Sin ventas registradas.</td></tr>{% endfor %}</tbody></table></div></article>
 </section>
 {% endblock %}
