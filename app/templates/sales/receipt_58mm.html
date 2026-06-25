@@ -7,7 +7,13 @@
 @page{size:58mm 200mm;margin:3mm}
 *{box-sizing:border-box;font-weight:400}
 body{width:52mm;margin:0 auto;font-family:"Courier New",Courier,monospace;font-size:9px;line-height:1.25;color:#111;background:#fff}
-.ticket{width:52mm}.center{text-align:center}.right{text-align:right}.row{display:flex;justify-content:space-between;gap:4px}.dash{white-space:nowrap;overflow:hidden;margin:5px 0}.dash::before{content:"------------------------------------------------"}.title{font-size:11px;text-transform:uppercase;margin:0}.subtitle{font-size:9px;margin:1px 0}.meta p,.totals p{margin:1px 0}.item{margin:4px 0}.item-name{margin-bottom:1px}.item-detail{display:grid;grid-template-columns:10mm 12mm 12mm 14mm;column-gap:1mm}.item-head{display:grid;grid-template-columns:10mm 12mm 12mm 14mm;column-gap:1mm;text-transform:uppercase}.num{text-align:right;white-space:nowrap}.actions{margin:10px 0;display:flex;gap:6px;font-family:Arial,sans-serif}.actions a,.actions button{border:1px solid #111;background:#fff;color:#111;padding:6px 8px;text-decoration:none;border-radius:8px;font-size:11px}@media print{.actions{display:none}body{width:52mm}}
+.ticket{width:52mm}.center{text-align:center}.right{text-align:right}.row{display:flex;justify-content:space-between;gap:4px}.dash{white-space:nowrap;overflow:hidden;margin:5px 0}.dash::before{content:"------------------------------------------------"}.title{font-size:11px;text-transform:uppercase;margin:0}.subtitle{font-size:9px;margin:1px 0}.meta p,.totals p{margin:1px 0}.item{margin:4px 0}.item-name{margin-bottom:1px}
+
+/* MODIFICADO: Se optimizaron los anchos de las 4 columnas para que sumen 52mm exactos y tengan más espacio */
+.item-detail{display:grid;grid-template-columns:8mm 14mm 14mm 16mm;column-gap:0mm}
+.item-head{display:grid;grid-template-columns:8mm 14mm 14mm 16mm;column-gap:0mm;text-transform:uppercase}
+
+.num{text-align:right;white-space:nowrap}.actions{margin:10px 0;display:flex;gap:6px;font-family:Arial,sans-serif}.actions a,.actions button{border:1px solid #111;background:#fff;color:#111;padding:6px 8px;text-decoration:none;border-radius:8px;font-size:11px}@media print{.actions{display:none}body{width:52mm}}
 </style>
 </head>
 <body>
@@ -25,10 +31,16 @@ body{width:52mm;margin:0 auto;font-family:"Courier New",Courier,monospace;font-s
         <p>Cajero ID: {{ venta.cajero_id }}</p>
         <p>Vendedor ID: {{ venta.vendedor_id or '-' }}</p>
         <p>Pago: {{ venta.metodo_pago or '-' }}</p>
+        <p>- - - - - - - - - - - - - - - - - -</p>
     </section>
     <div class="dash"></div>
     <section>
-        <div class="item-head"><span>Cant</span><span class="num">P.Unit</span><span class="num">Desc</span><span class="num">Subtotal</span></div>
+        <div class="item-head">
+            <span>Cant</span>
+            <span class="num">P.Unit</span>
+            <span class="num">Desc</span>
+            <span class="num">Subtotal</span>
+        </div>
         <div class="dash"></div>
         {% for item in venta.detalles %}
         <div class="item">
