@@ -5,20 +5,33 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>{% block title %}Ferretería{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}?v=20260624-2">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/sidebar.css') }}?v=20260625-1">
 </head>
 <body>
 {% if current_user %}
 {% set sales_roles = ['ADMIN_TIENDA','CAJERO','VENDEDOR'] %}
 {% set report_roles = ['ADMIN_GENERAL_NEGOCIO','ADMIN_TIENDA'] %}
 {% set user_roles = ['ADMIN_GENERAL_NEGOCIO','ADMIN_TIENDA'] %}
-<aside class="sidebar">
-    <a class="brand" href="{{ url_for('inventory.index') if current_user.rol_codigo == 'ADMIN_ALMACEN' else url_for('dashboard.index') }}"><span class="brand__mark">F</span><span><strong>Ferretería</strong><small>Sistema multi-sucursal</small></span></a>
+{% set endpoint = request.endpoint or '' %}
+<aside class="sidebar" aria-label="Menú lateral">
+    <a class="brand" href="{{ url_for('inventory.index') if current_user.rol_codigo == 'ADMIN_ALMACEN' else url_for('dashboard.index') }}" title="Ferretería">
+        <span class="brand__mark">F</span>
+        <span class="brand__text"><strong>Ferretería</strong><small>Sistema multi-sucursal</small></span>
+    </a>
     <nav class="side-nav">
-        {% if current_user.rol_codigo != 'ADMIN_ALMACEN' %}<a href="{{ url_for('dashboard.index') }}">Inicio</a>{% endif %}
-        {% if current_user.rol_codigo in sales_roles %}<a href="{{ url_for('sales.index') }}" class="nav-primary">Vender</a>{% endif %}
-        <a href="{{ url_for('inventory.index') }}">Inventario</a>
-        {% if current_user.rol_codigo in report_roles %}<a href="{{ url_for('reports.index') }}">Reportes</a>{% endif %}
-        {% if current_user.rol_codigo in user_roles %}<a href="{{ url_for('users.index') }}">Usuarios</a>{% endif %}
+        {% if current_user.rol_codigo != 'ADMIN_ALMACEN' %}
+        <a href="{{ url_for('dashboard.index') }}" class="nav-item {% if endpoint == 'dashboard.index' %}is-active{% endif %}" title="Inicio"><span class="nav-item__icon">⌂</span><span class="nav-item__label">Inicio</span></a>
+        {% endif %}
+        {% if current_user.rol_codigo in sales_roles %}
+        <a href="{{ url_for('sales.index') }}" class="nav-item nav-primary {% if endpoint.startswith('sales.') %}is-active{% endif %}" title="Vender"><span class="nav-item__icon">＋</span><span class="nav-item__label">Vender</span></a>
+        {% endif %}
+        <a href="{{ url_for('inventory.index') }}" class="nav-item {% if endpoint.startswith('inventory.') %}is-active{% endif %}" title="Inventario"><span class="nav-item__icon">▦</span><span class="nav-item__label">Inventario</span></a>
+        {% if current_user.rol_codigo in report_roles %}
+        <a href="{{ url_for('reports.index') }}" class="nav-item {% if endpoint.startswith('reports.') %}is-active{% endif %}" title="Reportes"><span class="nav-item__icon">◷</span><span class="nav-item__label">Reportes</span></a>
+        {% endif %}
+        {% if current_user.rol_codigo in user_roles %}
+        <a href="{{ url_for('users.index') }}" class="nav-item {% if endpoint.startswith('users.') %}is-active{% endif %}" title="Usuarios"><span class="nav-item__icon">◉</span><span class="nav-item__label">Usuarios</span></a>
+        {% endif %}
     </nav>
 </aside>
 {% endif %}
