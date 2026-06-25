@@ -53,11 +53,45 @@ def _movement_condition(tipo):
         return "HAVING entradas_periodo > 0"
     if tipo == "SALIDA":
         return "HAVING salidas_periodo > 0"
+    if tipo == "TRASPASO":
+        return "HAVING traspasos_periodo > 0"
     return ""
 
 
 def _money(value):
     return Decimal(str(value or 0)).quantize(Decimal("0.01"))
+
+
+def _allowed_location_ids_for_user(cliente_id):
+    role = g.user.get("rol_codigo")
+    if role == "ADMIN_GENERAL_NEGOCIO":
+        return None
+    if role != "ADMIN_TIENDA":
+        return []
+    sucursal_id = g.user.get("sucursal_id")
+    if not sucursal_id:
+        return []
+    with db_cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id
+            FROM ubicaciones_stock
+            WHERE cliente_id=%s AND sucursal_id=%s
+            ORDER BY tipo_ubicacion, nombre
+            """,
+            (cliente_id, sucursal_id),
+        )
+        return [row["id"] for row in cursor.fetchall()]
+
+
+def _restricted_location_ids(cliente_id, requested_ids):
+    allowed = _allowed_location_ids_for_user(cliente_id)
+    if allowed is None:
+        return requested_ids
+    if requested_ids:
+        filtered = [location_id for location_id in requested_ids if location_id in set(allowed)]
+        return filtered or [-1]
+    return allowed or [-1]
 
 
 def _report_rows(cliente_id, start, end, categoria_ids, ubicacion_ids, tipo_movimiento):
@@ -71,7 +105,7 @@ def _report_rows(cliente_id, start, end, categoria_ids, ubicacion_ids, tipo_movi
         filter_params.extend(ubicacion_ids)
     where = " AND ".join(filters)
     having = _movement_condition(tipo_movimiento)
-    date_params = [start, end, start, end, start, end, start, end, start, end]
+    date_params = [start, end, start, end, start, end, start, end, start, end, start, end]
     with db_cursor() as cursor:
         cursor.execute(
             f"""
@@ -92,6 +126,10 @@ def _report_rows(cliente_id, start, end, categoria_ids, ubicacion_ids, tipo_movi
                     WHEN im.tipo_movimiento = 'AJUSTE_NEGATIVO' AND im.ubicacion_origen_id = u.id AND DATE(im.created_at) BETWEEN %s AND %s THEN im.cantidad
                     ELSE 0
                 END), 0) AS salidas_periodo,
+                COALESCE(SUM(CASE
+                    WHEN im.tipo_movimiento = 'TRASPASO' AND (im.ubicacion_origen_id = u.id OR im.ubicacion_destino_id = u.id) AND DATE(im.created_at) BETWEEN %s AND %s THEN im.cantidad
+                    ELSE 0
+                END), 0) AS traspasos_periodo,
                 MAX(CASE
                     WHEN (im.ubicacion_origen_id = u.id OR im.ubicacion_destino_id = u.id) AND DATE(im.created_at) BETWEEN %s AND %s THEN im.created_at
                     ELSE NULL
@@ -121,6 +159,8 @@ def _report_rows(cliente_id, start, end, categoria_ids, ubicacion_ids, tipo_movi
             cantidad = int(row.get("entradas_periodo") or 0)
         elif tipo_movimiento == "SALIDA":
             cantidad = int(row.get("salidas_periodo") or 0)
+        elif tipo_movimiento == "TRASPASO":
+            cantidad = int(row.get("traspasos_periodo") or 0)
         else:
             cantidad = int(row.get("stock_actual") or 0)
         precio = _money(row.get("precio") or 0)
@@ -138,7 +178,7 @@ def _filter_names(cliente_id, categoria_ids, ubicacion_ids):
                 tuple([cliente_id] + categoria_ids),
             )
             result["categorias"] = [row["nombre"] for row in cursor.fetchall()]
-        if ubicacion_ids:
+        if ubicacion_ids and ubicacion_ids != [-1]:
             cursor.execute(
                 f"SELECT nombre FROM ubicaciones_stock WHERE cliente_id=%s AND id IN ({_placeholders(ubicacion_ids)}) ORDER BY tipo_ubicacion,nombre",
                 tuple([cliente_id] + ubicacion_ids),
@@ -158,7 +198,7 @@ def _report_header_context(cliente_id, ubicacion_ids):
             "direccion": cliente.get("direccion") or "-",
             "celular": cliente.get("telefono") or "-",
         }
-        if len(ubicacion_ids) != 1:
+        if len(ubicacion_ids) != 1 or ubicacion_ids == [-1]:
             if len(ubicacion_ids) > 1:
                 context["ubicacion"] = f"{len(ubicacion_ids)} ubicaciones seleccionadas"
             return context
@@ -229,15 +269,15 @@ def _create_report_number(cliente_id, usuario_id, start, end, tipo_movimiento, c
 
 @login_required
 def inventario_reporte_pdf():
-    if g.user["rol_codigo"] != "ADMIN_GENERAL_NEGOCIO":
-        return jsonify({"error": "Solo el administrador general puede generar este reporte."}), 403
+    if g.user["rol_codigo"] not in {"ADMIN_GENERAL_NEGOCIO", "ADMIN_TIENDA"}:
+        return jsonify({"error": "Tu rol no puede generar este reporte."}), 403
 
     periodo = request.args.get("periodo") or "DIA"
     start, end, period_label = _date_range(periodo, request.args.get("fecha_inicio"), request.args.get("fecha_fin"))
     categoria_ids = _int_list(request.args.getlist("categoria_id"))
-    ubicacion_ids = _int_list(request.args.getlist("ubicacion_id"))
+    ubicacion_ids = _restricted_location_ids(g.user["cliente_id"], _int_list(request.args.getlist("ubicacion_id")))
     tipo_movimiento = (request.args.get("tipo_movimiento") or "AMBOS").upper()
-    if tipo_movimiento not in {"ENTRADA", "SALIDA", "AMBOS"}:
+    if tipo_movimiento not in {"ENTRADA", "SALIDA", "TRASPASO", "AMBOS"}:
         tipo_movimiento = "AMBOS"
 
     rows = _report_rows(g.user["cliente_id"], start, end, categoria_ids, ubicacion_ids, tipo_movimiento)
@@ -251,6 +291,7 @@ def inventario_reporte_pdf():
         "stock": sum(int(row.get("stock_actual") or 0) for row in rows),
         "entradas": sum(int(row.get("entradas_periodo") or 0) for row in rows),
         "salidas": sum(int(row.get("salidas_periodo") or 0) for row in rows),
+        "traspasos": sum(int(row.get("traspasos_periodo") or 0) for row in rows),
     }
     generated_at = datetime.now()
     generated_by = " ".join(
