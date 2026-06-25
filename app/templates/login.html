@@ -5,9 +5,9 @@
     <div class="auth-card__brand"><span class="brand__mark">F</span><div><h1>Ingresar al sistema</h1><p>Control de ventas, stock, sucursales y almacenes.</p></div></div>
     <form method="post" class="form-stack">
         <label>Usuario <input type="text" name="username" value="{{ username or '' }}" autocomplete="username" required autofocus></label>
-        <label>Contraseña <input type="password" name="password" autocomplete="current-password" required></label>
+        <label>Contraseña <span class="password-field"><input type="password" name="password" autocomplete="current-password" required><button type="button" data-toggle-password>👁</button></span></label>
         <button class="btn btn--primary" type="submit">Entrar</button>
     </form>
-    <p class="hint">Demo: usuario <strong>admin</strong> · contraseña <strong>Admin123!</strong></p>
 </section>
 {% endblock %}
+{% block scripts %}<script>document.addEventListener('DOMContentLoaded',()=>{document.querySelectorAll('[data-toggle-password]').forEach(btn=>btn.addEventListener('click',()=>{const input=btn.parentElement.querySelector('input');const visible=input.type==='text';input.type=visible?'password':'text';btn.textContent=visible?'👁':'🙈'}));});</script><style>.password-field{display:flex;align-items:center;gap:8px}.password-field input{flex:1}.password-field button{width:44px;height:44px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2);cursor:pointer}</style>{% endblock %}
