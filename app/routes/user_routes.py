@@ -6,7 +6,7 @@ from app.services.user_service import (
     get_form_options,
     get_user_quota,
     list_users,
-    update_user_limit,
+    update_user,
 )
 from app.utils.security import login_required
 
@@ -45,15 +45,15 @@ def crear():
     return redirect(url_for("users.index"))
 
 
-@users_bp.route("/limite", methods=["POST"])
+@users_bp.route("/<int:user_id>/editar", methods=["POST"])
 @login_required
-def actualizar_limite():
+def editar(user_id):
     if not can_manage_users():
         flash("No tienes permisos para gestionar usuarios.", "danger")
         return redirect(url_for("dashboard.index"))
     try:
-        update_user_limit(g.user["cliente_id"], g.user["id"], request.form.get("max_usuarios"))
-        flash("Límite de usuarios actualizado correctamente.", "success")
+        update_user(g.user["cliente_id"], g.user["id"], user_id, request.form)
+        flash("Usuario actualizado correctamente.", "success")
     except ValueError as exc:
         flash(str(exc), "danger")
     return redirect(url_for("users.index"))
