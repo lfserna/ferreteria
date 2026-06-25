@@ -7,7 +7,6 @@
         <h1>{% if role == 'VENDEDOR' %}Mis ventas{% elif role == 'CAJERO' %}Mis cobros{% elif role == 'ADMIN_TIENDA' %}Resumen de tienda{% else %}Resumen del negocio{% endif %}</h1>
     </div>
     <div class="filters-inline">
-        {% if role in ['ADMIN_GENERAL_NEGOCIO','ADMIN_TIENDA'] %}<button class="btn btn--ghost" type="button" data-open-modal="cashHistoryModal">Historial cajas</button>{% endif %}
         {% if can_create_sale %}<a class="btn btn--primary" href="{{ url_for('sales.index') }}">Nueva venta</a>{% endif %}
     </div>
 </section>
@@ -19,7 +18,10 @@
 </section>
 {% if role in ['ADMIN_GENERAL_NEGOCIO','ADMIN_TIENDA'] %}
 <section class="panel">
-    <h2>Cajas abiertas</h2>
+    <div class="cart-heading">
+        <h2>Cajas abiertas</h2>
+        <button class="btn btn--ghost" type="button" data-open-modal="cashHistoryModal">Historial cajas</button>
+    </div>
     <div class="responsive-table">
         <table>
             <thead><tr><th>Caja</th><th>Sucursal</th><th>Cajero</th><th>Abierta desde</th><th>Efectivo</th><th>QR</th><th>Total recaudado</th></tr></thead>
