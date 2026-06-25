@@ -7,16 +7,18 @@
 @page{size:58mm 200mm;margin:3mm}
 *{box-sizing:border-box;font-weight:400}
 body{width:52mm;margin:0 auto;font-family:"Courier New",Courier,monospace;font-size:8.6px;line-height:1.25;color:#111;background:#fff}
-.ticket{width:52mm}.center{text-align:center}.right{text-align:right}.row{display:flex;justify-content:space-between;gap:4px}.dash{white-space:nowrap;overflow:hidden;margin:5px 0}.dash::before{content:"------------------------------------------------"}.title{font-size:11px;text-transform:uppercase;margin:0}.subtitle{font-size:9px;margin:1px 0}.meta p,.totals p{margin:1px 0}.num{text-align:right;white-space:nowrap}.actions{margin:10px 0;display:flex;gap:6px;font-family:Arial,sans-serif}.actions a,.actions button{border:1px solid #111;background:#fff;color:#111;padding:6px 8px;text-decoration:none;border-radius:8px;font-size:11px}
+.ticket{width:52mm}.center{text-align:center}.right{text-align:right}.row{display:flex;justify-content:space-between;gap:4px}.dash{border-top:1px dotted #111;margin:5px 0;height:0}.title{font-size:11px;text-transform:uppercase;margin:0}.subtitle{font-size:9px;margin:1px 0}.meta p,.totals p{margin:1px 0}.num{text-align:right;white-space:nowrap}.actions{margin:10px 0;display:flex;gap:6px;font-family:Arial,sans-serif}.actions a,.actions button{border:1px solid #111;background:#fff;color:#111;padding:6px 8px;text-decoration:none;border-radius:8px;font-size:11px}
+.section-title{font-size:8px;text-transform:uppercase;text-align:center;margin:3px 0 2px;color:#111}
 .item-table{width:52mm;border-collapse:collapse;table-layout:fixed}
 .item-table col.qty{width:8mm}.item-table col.unit{width:13mm}.item-table col.discount{width:13mm}.item-table col.subtotal{width:18mm}
-.item-table th{padding:0 1mm 1mm 0;text-transform:uppercase;text-align:right;white-space:nowrap}
+.item-table th{padding:0 1mm 1mm 0;text-transform:uppercase;text-align:right;white-space:nowrap;border-bottom:1px dotted #111}
 .item-table th:first-child{text-align:left}
 .item-table td{padding:0 1mm 1mm 0;vertical-align:top;text-align:right;white-space:nowrap}
 .item-table td:first-child{text-align:left}
-.item-name-row td{padding:3px 0 1px 0;text-align:left;white-space:normal;word-break:break-word}
+.item-name-row td{padding:3px 0 1px 0;text-align:left;white-space:normal;word-break:break-word;border-top:1px dotted #ccc}
 .item-values td{padding-bottom:2px}
-@media print{.actions{display:none}body{width:52mm}}
+.totals{border-top:1px dotted #111;border-bottom:1px dotted #111;padding:4px 0;margin-top:4px}
+@media print{.actions{display:none}body{width:52mm}.dash{border-top:1px dotted #111}}
 </style>
 </head>
 <body>
@@ -36,6 +38,7 @@ body{width:52mm;margin:0 auto;font-family:"Courier New",Courier,monospace;font-s
         <p>Pago: {{ venta.metodo_pago or '-' }}</p>
     </section>
     <div class="dash"></div>
+    <p class="section-title">Detalle</p>
     <table class="item-table">
         <colgroup>
             <col class="qty">
@@ -63,11 +66,9 @@ body{width:52mm;margin:0 auto;font-family:"Courier New",Courier,monospace;font-s
             {% endfor %}
         </tbody>
     </table>
-    <div class="dash"></div>
     <section class="totals">
         <p class="row"><span>TOTAL</span><span>Bs {{ '%.2f'|format(venta.total) }}</span></p>
     </section>
-    <div class="dash"></div>
     <p class="center">Gracias por su compra</p>
 </div>
 </body>
