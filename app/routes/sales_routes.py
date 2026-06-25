@@ -3,6 +3,7 @@ from io import BytesIO
 from flask import Blueprint, flash, g, jsonify, make_response, redirect, render_template, request, url_for
 from xhtml2pdf import pisa
 
+from app.database import db_cursor
 from app.services.cash_service import cash_summary, close_cash_session, open_cash_session, require_open_cash
 from app.services.context_service import get_primary_stock_location
 from app.services.product_service import search_products
@@ -199,6 +200,43 @@ def confirmar():
         return jsonify(to_jsonable(result)), 201
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+
+
+@sales_bp.route("/buscar-comprobante")
+@login_required
+def buscar_comprobante():
+    if not g.user or g.user.get("rol_codigo") not in {"ADMIN_GENERAL_NEGOCIO", "ADMIN_TIENDA"}:
+        return redirect(url_for("dashboard.index"))
+    raw_number = (request.args.get("numero_comprobante") or "").strip()
+    if not raw_number:
+        flash("Ingresa un número de comprobante para buscar.", "warning")
+        return redirect(url_for("dashboard.index"))
+    digits = "".join(ch for ch in raw_number if ch.isdigit())
+    if not digits:
+        flash("El número de comprobante debe contener dígitos.", "warning")
+        return redirect(url_for("dashboard.index"))
+    receipt_number = int(digits)
+    params = [g.user["cliente_id"], receipt_number, raw_number, digits]
+    filters = ["cliente_id=%s", "(numero_comprobante=%s OR numero_venta=%s OR numero_venta=%s)"]
+    if g.user.get("rol_codigo") == "ADMIN_TIENDA":
+        filters.append("sucursal_id=%s")
+        params.append(g.user.get("sucursal_id"))
+    with db_cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT id
+            FROM ventas
+            WHERE {' AND '.join(filters)}
+            ORDER BY fecha_venta DESC, id DESC
+            LIMIT 1
+            """,
+            tuple(params),
+        )
+        row = cursor.fetchone()
+    if not row:
+        flash(f"No se encontró el comprobante {raw_number} dentro de tu alcance.", "warning")
+        return redirect(url_for("dashboard.index"))
+    return redirect(url_for("sales.comprobante", venta_id=row["id"]))
 
 
 @sales_bp.route("/<int:venta_id>/comprobante")
