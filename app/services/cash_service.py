@@ -151,7 +151,7 @@ def migrate_cash_session_table(cursor):
     if "caja_id" in info:
         make_column_nullable(cursor, "caja_sesiones", info, "caja_id", "BIGINT UNSIGNED NULL")
 
-    safe_update_coalesce(cursor, "caja_sesiones", "fecha_operacion", ["DATE(fecha_apertura)", "DATE(abierta_at)", "DATE(created_at)"], "CURDATE()")
+    safe_update_coalesce(cursor, "caja_sesiones", "fecha_operacion", ["fecha_apertura", "abierta_at", "created_at"], "CURDATE()")
     safe_update_coalesce(cursor, "caja_sesiones", "abierta_at", ["fecha_apertura", "created_at"], "NOW()")
     safe_update_coalesce(cursor, "caja_sesiones", "created_at", ["abierta_at", "fecha_apertura"], "NOW()")
     if "monto_inicial" in columns:
@@ -400,38 +400,42 @@ def attach_sales_to_session(cursor, cliente_id, usuario_id, session_id, ubicacio
     )
 
 
+def select_cash_sales_totals(cursor, cliente_id, usuario_id, ubicacion_stock_id, opened_at, session_id=None, closed_at=None, attach=True):
+    ensure_sales_cash_session_column(cursor)
+    if session_id and attach:
+        attach_sales_to_session(cursor, cliente_id, usuario_id, session_id, ubicacion_stock_id, opened_at, closed_at)
+    cols = existing_columns(cursor, "ventas")
+    params = [cliente_id]
+    if session_id and "caja_sesion_id" in cols:
+        session_filter = " AND v.caja_sesion_id=%s"
+        params.append(session_id)
+    else:
+        session_filter = " AND v.cajero_id=%s AND v.fecha_venta >= %s AND (%s IS NULL OR v.ubicacion_stock_id=%s)"
+        params.extend([usuario_id, opened_at, ubicacion_stock_id, ubicacion_stock_id])
+        if closed_at:
+            session_filter += " AND v.fecha_venta <= %s"
+            params.append(closed_at)
+    cursor.execute(
+        f"""
+        SELECT
+            COALESCE(SUM(CASE WHEN vp.metodo_pago='EFECTIVO' THEN vp.monto ELSE 0 END),0) AS ventas_efectivo,
+            COALESCE(SUM(CASE WHEN vp.metodo_pago='QR' THEN vp.monto ELSE 0 END),0) AS ventas_qr
+        FROM ventas v
+        JOIN venta_pagos vp ON vp.venta_id=v.id AND vp.cliente_id=v.cliente_id
+        WHERE v.cliente_id=%s
+          AND v.estado='PAGADA'
+          {session_filter}
+        """,
+        tuple(params),
+    )
+    row = cursor.fetchone() or {}
+    return {"ventas_efectivo": money(row.get("ventas_efectivo")), "ventas_qr": money(row.get("ventas_qr"))}
+
+
 def cash_sales_totals(cliente_id, usuario_id, ubicacion_stock_id, opened_at, session_id=None, closed_at=None):
     ensure_sales_cash_session_column()
     with db_cursor(commit=True) as cursor:
-        if session_id:
-            attach_sales_to_session(cursor, cliente_id, usuario_id, session_id, ubicacion_stock_id, opened_at, closed_at)
-        cols = existing_columns(cursor, "ventas")
-        session_filter = ""
-        params = [cliente_id]
-        if session_id and "caja_sesion_id" in cols:
-            session_filter = " AND v.caja_sesion_id=%s"
-            params.append(session_id)
-        else:
-            session_filter = " AND v.cajero_id=%s AND v.fecha_venta >= %s AND (%s IS NULL OR v.ubicacion_stock_id=%s)"
-            params.extend([usuario_id, opened_at, ubicacion_stock_id, ubicacion_stock_id])
-            if closed_at:
-                session_filter += " AND v.fecha_venta <= %s"
-                params.append(closed_at)
-        cursor.execute(
-            f"""
-            SELECT
-                COALESCE(SUM(CASE WHEN vp.metodo_pago='EFECTIVO' THEN vp.monto ELSE 0 END),0) AS ventas_efectivo,
-                COALESCE(SUM(CASE WHEN vp.metodo_pago='QR' THEN vp.monto ELSE 0 END),0) AS ventas_qr
-            FROM ventas v
-            JOIN venta_pagos vp ON vp.venta_id=v.id AND vp.cliente_id=v.cliente_id
-            WHERE v.cliente_id=%s
-              AND v.estado='PAGADA'
-              {session_filter}
-            """,
-            tuple(params),
-        )
-        row = cursor.fetchone() or {}
-        return {"ventas_efectivo": money(row.get("ventas_efectivo")), "ventas_qr": money(row.get("ventas_qr"))}
+        return select_cash_sales_totals(cursor, cliente_id, usuario_id, ubicacion_stock_id, opened_at, session_id=session_id, closed_at=closed_at, attach=True)
 
 
 def cash_summary(cliente_id, usuario_id, ubicacion_stock_id=None):
@@ -471,8 +475,7 @@ def close_cash_session(cliente_id, usuario_id, ubicacion_stock_id, monto_final_e
         if not session:
             raise ValueError("No tienes una caja abierta para cerrar.")
         opened_at = session.get("abierta_at") or session.get("fecha_apertura") or session.get("created_at")
-        attach_sales_to_session(cursor, cliente_id, usuario_id, session["id"], session.get("ubicacion_stock_id"), opened_at)
-        sales = cash_sales_totals(cliente_id, usuario_id, session.get("ubicacion_stock_id"), opened_at, session_id=session["id"])
+        sales = select_cash_sales_totals(cursor, cliente_id, usuario_id, session.get("ubicacion_stock_id"), opened_at, session_id=session["id"], attach=True)
         expected_cash = money(session.get("monto_inicial_efectivo") or session.get("monto_inicial")) + sales["ventas_efectivo"]
         expected_qr = money(session.get("monto_inicial_qr")) + sales["ventas_qr"]
         expected_total = expected_cash + expected_qr
