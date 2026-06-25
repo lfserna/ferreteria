@@ -25,6 +25,8 @@ def ensure_cash_tables():
                 monto_esperado_qr DECIMAL(12,2) NULL,
                 monto_final_efectivo DECIMAL(12,2) NULL,
                 monto_final_qr DECIMAL(12,2) NULL,
+                diferencia_efectivo DECIMAL(12,2) NULL,
+                diferencia_qr DECIMAL(12,2) NULL,
                 abierta_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 cerrada_at DATETIME NULL,
                 observacion_apertura TEXT NULL,
@@ -37,6 +39,7 @@ def ensure_cash_tables():
             """
         )
         migrate_cash_session_table(cursor)
+        ensure_sales_cash_session_column(cursor)
 
 
 def table_exists(cursor, table_name):
@@ -73,20 +76,53 @@ def make_column_nullable(cursor, table_name, columns_info, name, definition):
         cursor.execute(f"ALTER TABLE {table_name} MODIFY COLUMN {name} {definition}")
 
 
-def add_index_if_missing(cursor, index_name, definition):
+def index_exists(cursor, table_name, index_name):
     cursor.execute(
         """
         SELECT COUNT(*) AS total
         FROM INFORMATION_SCHEMA.STATISTICS
         WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_NAME = 'caja_sesiones'
+          AND TABLE_NAME = %s
           AND INDEX_NAME = %s
         """,
-        (index_name,),
+        (table_name, index_name),
     )
-    exists = cursor.fetchone()
-    if not exists or int(exists.get("total") or 0) == 0:
+    exists = cursor.fetchone() or {}
+    return int(exists.get("total") or 0) > 0
+
+
+def add_index_if_missing(cursor, index_name, definition):
+    if not index_exists(cursor, "caja_sesiones", index_name):
         cursor.execute(f"ALTER TABLE caja_sesiones ADD INDEX {index_name} {definition}")
+
+
+def ensure_sales_cash_session_column(cursor=None):
+    def apply(cur):
+        if not table_exists(cur, "ventas"):
+            return
+        cols = existing_columns(cur, "ventas")
+        if "caja_sesion_id" not in cols:
+            cur.execute("ALTER TABLE ventas ADD COLUMN caja_sesion_id BIGINT UNSIGNED NULL")
+            cols.add("caja_sesion_id")
+        if not index_exists(cur, "ventas", "idx_ventas_caja_sesion"):
+            cur.execute("ALTER TABLE ventas ADD INDEX idx_ventas_caja_sesion (cliente_id, caja_sesion_id)")
+    if cursor is not None:
+        apply(cursor)
+    else:
+        with db_cursor(commit=True) as cur:
+            apply(cur)
+
+
+def safe_update_coalesce(cursor, table_name, target, sources, fallback="NOW()"):
+    cols = existing_columns(cursor, table_name)
+    if target not in cols:
+        return
+    existing = [col for col in sources if col in cols]
+    if existing:
+        expr = f"COALESCE({', '.join(existing)}, {fallback})"
+    else:
+        expr = fallback
+    cursor.execute(f"UPDATE {table_name} SET {target} = COALESCE({target}, {expr}) WHERE {target} IS NULL")
 
 
 def migrate_cash_session_table(cursor):
@@ -102,6 +138,8 @@ def migrate_cash_session_table(cursor):
     add_column_if_missing(cursor, columns, "monto_esperado_qr", "DECIMAL(12,2) NULL")
     add_column_if_missing(cursor, columns, "monto_final_efectivo", "DECIMAL(12,2) NULL")
     add_column_if_missing(cursor, columns, "monto_final_qr", "DECIMAL(12,2) NULL")
+    add_column_if_missing(cursor, columns, "diferencia_efectivo", "DECIMAL(12,2) NULL")
+    add_column_if_missing(cursor, columns, "diferencia_qr", "DECIMAL(12,2) NULL")
     add_column_if_missing(cursor, columns, "abierta_at", "DATETIME NULL")
     add_column_if_missing(cursor, columns, "cerrada_at", "DATETIME NULL")
     add_column_if_missing(cursor, columns, "observacion_apertura", "TEXT NULL")
@@ -113,10 +151,11 @@ def migrate_cash_session_table(cursor):
     if "caja_id" in info:
         make_column_nullable(cursor, "caja_sesiones", info, "caja_id", "BIGINT UNSIGNED NULL")
 
-    cursor.execute("UPDATE caja_sesiones SET fecha_operacion = COALESCE(fecha_operacion, DATE(fecha_apertura), CURDATE()) WHERE fecha_operacion IS NULL")
-    cursor.execute("UPDATE caja_sesiones SET abierta_at = COALESCE(abierta_at, fecha_apertura, created_at, NOW()) WHERE abierta_at IS NULL")
-    cursor.execute("UPDATE caja_sesiones SET created_at = COALESCE(created_at, abierta_at, fecha_apertura, NOW()) WHERE created_at IS NULL")
-    cursor.execute("UPDATE caja_sesiones SET monto_inicial_efectivo = COALESCE(monto_inicial_efectivo, monto_inicial, 0)")
+    safe_update_coalesce(cursor, "caja_sesiones", "fecha_operacion", ["DATE(fecha_apertura)", "DATE(abierta_at)", "DATE(created_at)"], "CURDATE()")
+    safe_update_coalesce(cursor, "caja_sesiones", "abierta_at", ["fecha_apertura", "created_at"], "NOW()")
+    safe_update_coalesce(cursor, "caja_sesiones", "created_at", ["abierta_at", "fecha_apertura"], "NOW()")
+    if "monto_inicial" in columns:
+        cursor.execute("UPDATE caja_sesiones SET monto_inicial_efectivo = COALESCE(monto_inicial_efectivo, monto_inicial, 0)")
     add_index_if_missing(cursor, "idx_caja_sesion_abierta", "(cliente_id, usuario_id, estado)")
     add_index_if_missing(cursor, "idx_caja_sesion_fecha", "(cliente_id, fecha_operacion)")
 
@@ -331,22 +370,65 @@ def open_cash_session(cliente_id, usuario_id, ubicacion_stock_id, monto_inicial_
         return session_id
 
 
-def cash_sales_totals(cliente_id, usuario_id, ubicacion_stock_id, opened_at):
-    with db_cursor() as cursor:
+def attach_sales_to_session(cursor, cliente_id, usuario_id, session_id, ubicacion_stock_id, opened_at, closed_at=None):
+    ensure_sales_cash_session_column(cursor)
+    cols = existing_columns(cursor, "ventas")
+    if "caja_sesion_id" not in cols:
+        return
+    params = [session_id, cliente_id, usuario_id, opened_at]
+    location_filter = ""
+    if ubicacion_stock_id:
+        location_filter = " AND (ubicacion_stock_id=%s OR ubicacion_stock_id IS NULL)"
+        params.append(ubicacion_stock_id)
+    closed_filter = ""
+    if closed_at:
+        closed_filter = " AND fecha_venta <= %s"
+        params.append(closed_at)
+    cursor.execute(
+        f"""
+        UPDATE ventas
+        SET caja_sesion_id=%s
+        WHERE cliente_id=%s
+          AND cajero_id=%s
+          AND caja_sesion_id IS NULL
+          AND estado='PAGADA'
+          AND fecha_venta >= %s
+          {closed_filter}
+          {location_filter}
+        """,
+        tuple(params),
+    )
+
+
+def cash_sales_totals(cliente_id, usuario_id, ubicacion_stock_id, opened_at, session_id=None, closed_at=None):
+    ensure_sales_cash_session_column()
+    with db_cursor(commit=True) as cursor:
+        if session_id:
+            attach_sales_to_session(cursor, cliente_id, usuario_id, session_id, ubicacion_stock_id, opened_at, closed_at)
+        cols = existing_columns(cursor, "ventas")
+        session_filter = ""
+        params = [cliente_id]
+        if session_id and "caja_sesion_id" in cols:
+            session_filter = " AND v.caja_sesion_id=%s"
+            params.append(session_id)
+        else:
+            session_filter = " AND v.cajero_id=%s AND v.fecha_venta >= %s AND (%s IS NULL OR v.ubicacion_stock_id=%s)"
+            params.extend([usuario_id, opened_at, ubicacion_stock_id, ubicacion_stock_id])
+            if closed_at:
+                session_filter += " AND v.fecha_venta <= %s"
+                params.append(closed_at)
         cursor.execute(
-            """
+            f"""
             SELECT
                 COALESCE(SUM(CASE WHEN vp.metodo_pago='EFECTIVO' THEN vp.monto ELSE 0 END),0) AS ventas_efectivo,
                 COALESCE(SUM(CASE WHEN vp.metodo_pago='QR' THEN vp.monto ELSE 0 END),0) AS ventas_qr
             FROM ventas v
             JOIN venta_pagos vp ON vp.venta_id=v.id AND vp.cliente_id=v.cliente_id
             WHERE v.cliente_id=%s
-              AND v.cajero_id=%s
               AND v.estado='PAGADA'
-              AND v.fecha_venta >= %s
-              AND (%s IS NULL OR v.ubicacion_stock_id=%s)
+              {session_filter}
             """,
-            (cliente_id, usuario_id, opened_at, ubicacion_stock_id, ubicacion_stock_id),
+            tuple(params),
         )
         row = cursor.fetchone() or {}
         return {"ventas_efectivo": money(row.get("ventas_efectivo")), "ventas_qr": money(row.get("ventas_qr"))}
@@ -357,7 +439,7 @@ def cash_summary(cliente_id, usuario_id, ubicacion_stock_id=None):
     if not session:
         return None
     opened_at = session.get("abierta_at") or session.get("fecha_apertura") or session.get("created_at")
-    sales = cash_sales_totals(cliente_id, usuario_id, session.get("ubicacion_stock_id"), opened_at)
+    sales = cash_sales_totals(cliente_id, usuario_id, session.get("ubicacion_stock_id"), opened_at, session_id=session.get("id"))
     expected_cash = money(session.get("monto_inicial_efectivo") or session.get("monto_inicial")) + sales["ventas_efectivo"]
     expected_qr = money(session.get("monto_inicial_qr")) + sales["ventas_qr"]
     return {"session": session, "ventas_efectivo": sales["ventas_efectivo"], "ventas_qr": sales["ventas_qr"], "esperado_efectivo": expected_cash, "esperado_qr": expected_qr}
@@ -389,11 +471,15 @@ def close_cash_session(cliente_id, usuario_id, ubicacion_stock_id, monto_final_e
         if not session:
             raise ValueError("No tienes una caja abierta para cerrar.")
         opened_at = session.get("abierta_at") or session.get("fecha_apertura") or session.get("created_at")
-        sales = cash_sales_totals(cliente_id, usuario_id, session.get("ubicacion_stock_id"), opened_at)
+        attach_sales_to_session(cursor, cliente_id, usuario_id, session["id"], session.get("ubicacion_stock_id"), opened_at)
+        sales = cash_sales_totals(cliente_id, usuario_id, session.get("ubicacion_stock_id"), opened_at, session_id=session["id"])
         expected_cash = money(session.get("monto_inicial_efectivo") or session.get("monto_inicial")) + sales["ventas_efectivo"]
         expected_qr = money(session.get("monto_inicial_qr")) + sales["ventas_qr"]
         expected_total = expected_cash + expected_qr
         final_total = final_cash + final_qr
+        diff_cash = final_cash - expected_cash
+        diff_qr = final_qr - expected_qr
+        diff_total = final_total - expected_total
         updates = {
             "estado": "CERRADA",
             "usuario_cierre_id": usuario_id,
@@ -402,9 +488,11 @@ def close_cash_session(cliente_id, usuario_id, ubicacion_stock_id, monto_final_e
             "monto_esperado_qr": expected_qr,
             "monto_final_efectivo": final_cash,
             "monto_final_qr": final_qr,
+            "diferencia_efectivo": diff_cash,
+            "diferencia_qr": diff_qr,
             "monto_final_sistema": expected_total,
             "monto_final_contado": final_total,
-            "diferencia": final_total - expected_total,
+            "diferencia": diff_total,
             "cerrada_at": "NOW()",
             "observacion_cierre": observacion,
             "observacion": observacion,
@@ -423,5 +511,5 @@ def close_cash_session(cliente_id, usuario_id, ubicacion_stock_id, monto_final_e
                 update_params.append(value)
         update_params.append(session["id"])
         cursor.execute(f"UPDATE caja_sesiones SET {', '.join(set_parts)} WHERE id=%s", tuple(update_params))
-        log_audit(cursor, cliente_id=cliente_id, usuario_id=usuario_id, modulo="CAJA", accion="CERRAR_CAJA", tabla_afectada="caja_sesiones", registro_id=session["id"], valor_anterior=session, valor_nuevo={"esperado_efectivo": str(expected_cash), "esperado_qr": str(expected_qr), "final_efectivo": str(final_cash), "final_qr": str(final_qr)})
-        return {"esperado_efectivo": expected_cash, "esperado_qr": expected_qr, "final_efectivo": final_cash, "final_qr": final_qr}
+        log_audit(cursor, cliente_id=cliente_id, usuario_id=usuario_id, modulo="CAJA", accion="CERRAR_CAJA", tabla_afectada="caja_sesiones", registro_id=session["id"], valor_anterior=session, valor_nuevo={"esperado_efectivo": str(expected_cash), "esperado_qr": str(expected_qr), "final_efectivo": str(final_cash), "final_qr": str(final_qr), "diferencia_efectivo": str(diff_cash), "diferencia_qr": str(diff_qr), "diferencia": str(diff_total)})
+        return {"esperado_efectivo": expected_cash, "esperado_qr": expected_qr, "final_efectivo": final_cash, "final_qr": final_qr, "diferencia_efectivo": diff_cash, "diferencia_qr": diff_qr, "diferencia": diff_total}
