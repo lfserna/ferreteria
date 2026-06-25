@@ -172,10 +172,10 @@ def confirmar():
     if not ubicacion_stock_id:
         return jsonify({"error": "El usuario no tiene una ubicación de stock configurada."}), 400
     try:
-        require_open_cash(g.user["cliente_id"], g.user["id"], ubicacion_stock_id)
+        caja = require_open_cash(g.user["cliente_id"], g.user["id"], ubicacion_stock_id)
         result = confirm_sale_from_cart(cliente_id=g.user["cliente_id"], sucursal_id=g.user.get("sucursal_id"), ubicacion_stock_id=ubicacion_stock_id,
                                         cajero_id=g.user["id"], vendedor_id=selected_seller_id_from_payload(payload), created_by=g.user["id"], items=payload.get("items", []),
-                                        metodo_pago=payload.get("metodo_pago"), idempotency_key=payload.get("idempotency_key"), orden_id=payload.get("orden_id"))
+                                        metodo_pago=payload.get("metodo_pago"), idempotency_key=payload.get("idempotency_key"), orden_id=payload.get("orden_id"), caja_sesion_id=(caja.get("session") or {}).get("id"))
         return jsonify(to_jsonable(result)), 201
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
