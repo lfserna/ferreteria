@@ -36,8 +36,10 @@ function updateSellerChips() {
   document.querySelectorAll('[data-seller-chip]').forEach(chip => {
     const selected = String(chip.dataset.sellerChip || '') === String(saleState.selectedSellerId || '');
     chip.classList.toggle('is-selected', selected);
-    chip.style.background = selected ? 'var(--primary-soft, rgba(0,0,0,.08))' : 'transparent';
-    chip.style.borderColor = selected ? 'var(--primary, #111)' : 'var(--border)';
+    chip.style.background = selected ? '#dbeafe' : 'transparent';
+    chip.style.borderColor = selected ? '#60a5fa' : 'var(--border)';
+    chip.style.color = selected ? '#1e3a8a' : '';
+    chip.style.boxShadow = selected ? '0 0 0 2px rgba(96,165,250,.18)' : 'none';
   });
 }
 
