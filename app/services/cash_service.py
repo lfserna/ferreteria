@@ -51,8 +51,18 @@ def add_column_if_missing(cursor, columns, name, definition):
 
 
 def add_index_if_missing(cursor, index_name, definition):
-    cursor.execute("SHOW INDEX FROM caja_sesiones WHERE Key_name=%s", (index_name,))
-    if not cursor.fetchone():
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM INFORMATION_SCHEMA.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'caja_sesiones'
+          AND INDEX_NAME = %s
+        """,
+        (index_name,),
+    )
+    exists = cursor.fetchone()
+    if not exists or int(exists.get("total") or 0) == 0:
         cursor.execute(f"ALTER TABLE caja_sesiones ADD INDEX {index_name} {definition}")
 
 
@@ -61,7 +71,7 @@ def migrate_cash_session_table(cursor):
     add_column_if_missing(cursor, columns, "cliente_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1")
     add_column_if_missing(cursor, columns, "usuario_id", "BIGINT UNSIGNED NOT NULL DEFAULT 0")
     add_column_if_missing(cursor, columns, "ubicacion_stock_id", "BIGINT UNSIGNED NULL")
-    add_column_if_missing(cursor, columns, "fecha_operacion", "DATE NOT NULL DEFAULT (CURRENT_DATE)")
+    add_column_if_missing(cursor, columns, "fecha_operacion", "DATE NULL")
     add_column_if_missing(cursor, columns, "estado", "ENUM('ABIERTA','CERRADA') NOT NULL DEFAULT 'ABIERTA'")
     add_column_if_missing(cursor, columns, "monto_inicial_efectivo", "DECIMAL(12,2) NOT NULL DEFAULT 0")
     add_column_if_missing(cursor, columns, "monto_inicial_qr", "DECIMAL(12,2) NOT NULL DEFAULT 0")
@@ -69,12 +79,15 @@ def migrate_cash_session_table(cursor):
     add_column_if_missing(cursor, columns, "monto_esperado_qr", "DECIMAL(12,2) NULL")
     add_column_if_missing(cursor, columns, "monto_final_efectivo", "DECIMAL(12,2) NULL")
     add_column_if_missing(cursor, columns, "monto_final_qr", "DECIMAL(12,2) NULL")
-    add_column_if_missing(cursor, columns, "abierta_at", "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP")
+    add_column_if_missing(cursor, columns, "abierta_at", "DATETIME NULL")
     add_column_if_missing(cursor, columns, "cerrada_at", "DATETIME NULL")
     add_column_if_missing(cursor, columns, "observacion_apertura", "TEXT NULL")
     add_column_if_missing(cursor, columns, "observacion_cierre", "TEXT NULL")
-    add_column_if_missing(cursor, columns, "created_at", "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP")
+    add_column_if_missing(cursor, columns, "created_at", "DATETIME NULL")
     add_column_if_missing(cursor, columns, "updated_at", "DATETIME NULL")
+    cursor.execute("UPDATE caja_sesiones SET fecha_operacion = COALESCE(fecha_operacion, CURDATE()) WHERE fecha_operacion IS NULL")
+    cursor.execute("UPDATE caja_sesiones SET abierta_at = COALESCE(abierta_at, created_at, NOW()) WHERE abierta_at IS NULL")
+    cursor.execute("UPDATE caja_sesiones SET created_at = COALESCE(created_at, abierta_at, NOW()) WHERE created_at IS NULL")
     add_index_if_missing(cursor, "idx_caja_sesion_abierta", "(cliente_id, usuario_id, estado)")
     add_index_if_missing(cursor, "idx_caja_sesion_fecha", "(cliente_id, fecha_operacion)")
 
