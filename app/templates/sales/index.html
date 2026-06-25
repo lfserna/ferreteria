@@ -69,22 +69,19 @@
     <section class="modal__content" role="dialog" aria-modal="true" aria-labelledby="checkoutTitle">
         <header class="modal__header"><div><p class="eyebrow">Vista preliminar</p><h2 id="checkoutTitle">Confirmar venta</h2></div><button class="icon-btn" type="button" data-close-modal>×</button></header>
         <div id="checkoutPreview" class="checkout-preview"></div>
-        <details class="seller-picker" id="sellerPickerBox">
-            <summary>Vendedor de la venta</summary>
-            <label>Asignar vendedor
-                <select id="saleSellerSelect" class="search-input">
-                    <option value="">Sin vendedor</option>
-                    {% for seller in sellers %}
-                    <option value="{{ seller.id }}">{{ seller.nombre_visible }} · ID {{ seller.id }}</option>
-                    {% endfor %}
-                </select>
-            </label>
-            <small id="sellerPickerHint">Si cargas un pedido enviado por vendedor, se usará ese vendedor.</small>
-        </details>
+        <div class="seller-chip-box" id="sellerChipBox" style="margin:10px 0 8px">
+            <small style="display:block;margin-bottom:6px;color:var(--muted)">Vendedor</small>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <button class="seller-chip" type="button" data-seller-chip="" data-seller-name="Sin vendedor" style="border:1px solid var(--border);background:transparent;border-radius:999px;padding:5px 10px;font-size:12px;line-height:1">Sin vendedor</button>
+                {% for seller in sellers %}
+                <button class="seller-chip" type="button" data-seller-chip="{{ seller.id }}" data-seller-name="{{ seller.nombre_visible }}" style="border:1px solid var(--border);background:transparent;border-radius:999px;padding:5px 10px;font-size:12px;line-height:1">{{ seller.nombre_visible }}</button>
+                {% endfor %}
+            </div>
+        </div>
         <div class="choice-group" data-choice-group="payment"><button type="button" data-value="EFECTIVO">Efectivo</button><button type="button" data-value="QR">QR</button><button type="button" data-value="TARJETA">Tarjeta</button><button type="button" data-value="TRANSFERENCIA">Transferencia</button></div>
         <footer class="modal__footer"><button class="btn btn--ghost" type="button" data-close-modal>Cancelar</button><button id="confirmSaleBtn" class="btn btn--primary" type="button">Confirmar pago</button></footer>
         <div id="saleResult" class="sale-result" hidden></div>
     </section>
 </div>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='js/sales.js') }}?v=20260625-1"></script>{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/sales.js') }}?v=20260625-2"></script>{% endblock %}
