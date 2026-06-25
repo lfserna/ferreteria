@@ -144,7 +144,11 @@ def list_users(cliente_id: int):
                    {optional_user_field(user_cols, 'celular')},
                    {optional_user_field(user_cols, 'email')},
                    {optional_user_field(user_cols, 'estado', default="'ACTIVO'")},
+                   r.id AS rol_id,
+                   r.codigo AS rol_codigo,
                    r.nombre AS rol,
+                   {sucursal_expr} AS sucursal_id,
+                   {almacen_expr} AS almacen_id,
                    s.nombre AS sucursal,
                    a.nombre AS almacen
             FROM usuarios u
@@ -183,6 +187,24 @@ def resolve_scope(role_code: str, sucursal_id, almacen_id):
     return "SUCURSAL", int(sucursal_id), None
 
 
+def active_user_count(cursor, cliente_id: int):
+    cursor.execute(
+        "SELECT COUNT(*) AS total FROM usuarios WHERE cliente_id = %s AND deleted_at IS NULL AND estado <> 'INACTIVO'",
+        (cliente_id,),
+    )
+    return int(cursor.fetchone()["total"])
+
+
+def ensure_activation_allowed(cursor, cliente_id: int, current_estado: str, new_estado: str):
+    if str(current_estado or "ACTIVO").upper() != "INACTIVO" or str(new_estado or "ACTIVO").upper() == "INACTIVO":
+        return
+    ensure_user_quota_column(cursor)
+    cursor.execute("SELECT max_usuarios FROM clientes WHERE id=%s LIMIT 1", (cliente_id,))
+    cliente = cursor.fetchone() or {"max_usuarios": DEFAULT_MAX_USERS}
+    if active_user_count(cursor, cliente_id) >= int(cliente.get("max_usuarios") or DEFAULT_MAX_USERS):
+        raise ValueError(f"No puedes activar este usuario porque el cliente llegó al límite de {cliente['max_usuarios']} usuarios activos.")
+
+
 def create_user(cliente_id: int, current_user_id: int, data: dict):
     nombres = (data.get("nombres") or "").strip()
     apellido_paterno = (data.get("apellido_paterno") or "").strip()
@@ -205,11 +227,7 @@ def create_user(cliente_id: int, current_user_id: int, data: dict):
         cliente = cursor.fetchone()
         if not cliente:
             raise ValueError("Cliente no encontrado.")
-        cursor.execute(
-            "SELECT COUNT(*) AS total FROM usuarios WHERE cliente_id = %s AND deleted_at IS NULL AND estado <> 'INACTIVO'",
-            (cliente_id,),
-        )
-        total_users = int(cursor.fetchone()["total"])
+        total_users = active_user_count(cursor, cliente_id)
         if total_users >= int(cliente["max_usuarios"]):
             raise ValueError(f"Este cliente ya llegó al límite de {cliente['max_usuarios']} usuarios.")
 
@@ -270,3 +288,77 @@ def create_user(cliente_id: int, current_user_id: int, data: dict):
                   accion="CREAR_USUARIO", tabla_afectada="usuarios", registro_id=user_id,
                   valor_nuevo={"username": username, "rol_id": role_id, "alcance": alcance})
         return {"id": user_id, "username": username, "default_password": DEFAULT_USER_PASSWORD}
+
+
+def update_user(cliente_id: int, current_user_id: int, user_id: int, data: dict):
+    estado = (data.get("estado") or "ACTIVO").upper()
+    if estado not in {"ACTIVO", "INACTIVO"}:
+        estado = "ACTIVO"
+    celular = (data.get("celular") or "").strip()
+    email = (data.get("email") or "").strip() or None
+    edad = data.get("edad") or None
+    role_id = int(data.get("rol_id") or 0)
+    sucursal_id = data.get("sucursal_id") or None
+    almacen_id = data.get("almacen_id") or None
+    if not role_id:
+        raise ValueError("Selecciona un rol para el usuario.")
+
+    with db_transaction() as (cursor, _connection):
+        user_cols = table_columns(cursor, "usuarios")
+        role_cols = table_columns(cursor, "usuario_roles")
+        cursor.execute("SELECT * FROM usuarios WHERE cliente_id=%s AND id=%s FOR UPDATE", (cliente_id, user_id))
+        previous = cursor.fetchone()
+        if not previous:
+            raise ValueError("Usuario no encontrado.")
+        ensure_activation_allowed(cursor, cliente_id, previous.get("estado"), estado)
+        cursor.execute("SELECT id, codigo FROM roles WHERE id=%s AND estado='ACTIVO' LIMIT 1", (role_id,))
+        role = cursor.fetchone()
+        if not role:
+            raise ValueError("Rol inválido.")
+        alcance, resolved_sucursal_id, resolved_almacen_id = resolve_scope(role["codigo"], sucursal_id, almacen_id)
+
+        values = {"edad": edad, "celular": celular, "email": email, "estado": estado, "sucursal_id": resolved_sucursal_id, "almacen_id": resolved_almacen_id, "updated_at": "NOW()"}
+        raw = {"updated_at"}
+        set_parts = []
+        params = []
+        for col in ["edad", "celular", "email", "estado", "sucursal_id", "almacen_id", "updated_at"]:
+            if col not in user_cols:
+                continue
+            if col in raw:
+                set_parts.append(f"{col}={values[col]}")
+            else:
+                set_parts.append(f"{col}=%s")
+                params.append(values[col])
+        if set_parts:
+            params.extend([cliente_id, user_id])
+            cursor.execute(f"UPDATE usuarios SET {', '.join(set_parts)} WHERE cliente_id=%s AND id=%s", tuple(params))
+
+        cursor.execute("SELECT id FROM usuario_roles WHERE cliente_id=%s AND usuario_id=%s AND estado='ACTIVO' ORDER BY id DESC LIMIT 1 FOR UPDATE", (cliente_id, user_id))
+        active_role = cursor.fetchone()
+        if active_role:
+            role_updates = {"rol_id": role_id, "alcance": alcance, "sucursal_id": resolved_sucursal_id, "almacen_id": resolved_almacen_id, "updated_at": "NOW()"}
+            role_set = []
+            role_params = []
+            for col in ["rol_id", "alcance", "sucursal_id", "almacen_id", "updated_at"]:
+                if col not in role_cols:
+                    continue
+                if col == "updated_at":
+                    role_set.append(f"{col}=NOW()")
+                else:
+                    role_set.append(f"{col}=%s")
+                    role_params.append(role_updates[col])
+            if role_set:
+                role_params.append(active_role["id"])
+                cursor.execute(f"UPDATE usuario_roles SET {', '.join(role_set)} WHERE id=%s", tuple(role_params))
+        else:
+            cursor.execute(
+                """
+                INSERT INTO usuario_roles
+                    (cliente_id, usuario_id, rol_id, alcance, sucursal_id, almacen_id, estado, created_at, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,'ACTIVO',NOW(),NOW())
+                """,
+                (cliente_id, user_id, role_id, alcance, resolved_sucursal_id, resolved_almacen_id),
+            )
+        log_audit(cursor, cliente_id=cliente_id, usuario_id=current_user_id, modulo="USUARIOS",
+                  accion="EDITAR_USUARIO", tabla_afectada="usuarios", registro_id=user_id,
+                  valor_anterior=previous, valor_nuevo={"estado": estado, "rol_id": role_id, "alcance": alcance, "sucursal_id": resolved_sucursal_id, "almacen_id": resolved_almacen_id})
