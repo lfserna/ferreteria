@@ -81,35 +81,41 @@ def list_open_cash_sessions(cursor):
     if role == "ADMIN_TIENDA":
         store_filter = "AND (us.sucursal_id = %s OR caj.sucursal_id = %s)"
         params.extend([g.user.get("sucursal_id"), g.user.get("sucursal_id")])
+    cols = table_columns(cursor, "caja_sesiones")
     ventas_cols = table_columns(cursor, "ventas")
+    user_expr = coalesce_existing(cols, ["cs.usuario_id", "cs.usuario_apertura_id"], "cs.usuario_id")
+    opened_expr = coalesce_existing(cols, ["cs.abierta_at", "cs.fecha_apertura", "cs.created_at"], "cs.created_at")
+    location_expr = "cs.ubicacion_stock_id" if "ubicacion_stock_id" in cols else "NULL"
+    initial_cash_expr = "COALESCE(cs.monto_inicial_efectivo, cs.monto_inicial, 0)" if "monto_inicial" in cols else "COALESCE(cs.monto_inicial_efectivo, 0)"
+    initial_qr_expr = "COALESCE(cs.monto_inicial_qr, 0)" if "monto_inicial_qr" in cols else "0"
     if "caja_sesion_id" in ventas_cols:
-        sale_match = "(v.caja_sesion_id = cs.id OR (v.caja_sesion_id IS NULL AND v.cajero_id = COALESCE(cs.usuario_id, cs.usuario_apertura_id) AND v.fecha_venta >= COALESCE(cs.abierta_at, cs.fecha_apertura, cs.created_at) AND (cs.ubicacion_stock_id IS NULL OR v.ubicacion_stock_id = cs.ubicacion_stock_id)))"
+        sale_match = f"(v.caja_sesion_id = cs.id OR (v.caja_sesion_id IS NULL AND v.cajero_id = {user_expr} AND v.fecha_venta >= {opened_expr} AND ({location_expr} IS NULL OR v.ubicacion_stock_id = {location_expr})))"
     else:
-        sale_match = "(v.cajero_id = COALESCE(cs.usuario_id, cs.usuario_apertura_id) AND v.fecha_venta >= COALESCE(cs.abierta_at, cs.fecha_apertura, cs.created_at) AND (cs.ubicacion_stock_id IS NULL OR v.ubicacion_stock_id = cs.ubicacion_stock_id))"
+        sale_match = f"(v.cajero_id = {user_expr} AND v.fecha_venta >= {opened_expr} AND ({location_expr} IS NULL OR v.ubicacion_stock_id = {location_expr}))"
     cursor.execute(
         f"""
         SELECT
             cs.id,
-            COALESCE(cs.usuario_id, cs.usuario_apertura_id) AS cajero_id,
+            {user_expr} AS cajero_id,
             COALESCE(CONCAT_WS(' ', caj.nombres, caj.apellido_paterno), caj.username) AS cajero_nombre,
             caj.username AS cajero_username,
             COALESCE(us.nombre, s.nombre, 'Sin ubicación') AS ubicacion_nombre,
             COALESCE(s.nombre, suc_caj.nombre, 'Sin sucursal') AS sucursal_nombre,
-            COALESCE(cs.abierta_at, cs.fecha_apertura, cs.created_at) AS abierta_at,
-            COALESCE(cs.monto_inicial_efectivo, cs.monto_inicial, 0) AS monto_inicial_efectivo,
-            COALESCE(cs.monto_inicial_qr, 0) AS monto_inicial_qr,
+            {opened_expr} AS abierta_at,
+            {initial_cash_expr} AS monto_inicial_efectivo,
+            {initial_qr_expr} AS monto_inicial_qr,
             COALESCE((SELECT SUM(vp.monto) FROM ventas v JOIN venta_pagos vp ON vp.venta_id = v.id AND vp.cliente_id = v.cliente_id WHERE v.cliente_id = cs.cliente_id AND v.estado = 'PAGADA' AND {sale_match}), 0) AS total_recaudado,
             COALESCE((SELECT SUM(CASE WHEN vp.metodo_pago='EFECTIVO' THEN vp.monto ELSE 0 END) FROM ventas v JOIN venta_pagos vp ON vp.venta_id = v.id AND vp.cliente_id = v.cliente_id WHERE v.cliente_id = cs.cliente_id AND v.estado = 'PAGADA' AND {sale_match}), 0) AS total_efectivo,
             COALESCE((SELECT SUM(CASE WHEN vp.metodo_pago='QR' THEN vp.monto ELSE 0 END) FROM ventas v JOIN venta_pagos vp ON vp.venta_id = v.id AND vp.cliente_id = v.cliente_id WHERE v.cliente_id = cs.cliente_id AND v.estado = 'PAGADA' AND {sale_match}), 0) AS total_qr
         FROM caja_sesiones cs
-        LEFT JOIN usuarios caj ON caj.id = COALESCE(cs.usuario_id, cs.usuario_apertura_id)
-        LEFT JOIN ubicaciones_stock us ON us.id = cs.ubicacion_stock_id
+        LEFT JOIN usuarios caj ON caj.id = {user_expr}
+        LEFT JOIN ubicaciones_stock us ON us.id = {location_expr}
         LEFT JOIN sucursales s ON s.id = us.sucursal_id
         LEFT JOIN sucursales suc_caj ON suc_caj.id = caj.sucursal_id
         WHERE cs.cliente_id = %s
           AND cs.estado = 'ABIERTA'
           {store_filter}
-        ORDER BY COALESCE(cs.abierta_at, cs.fecha_apertura, cs.created_at) DESC, cs.id DESC
+        ORDER BY {opened_expr} DESC, cs.id DESC
         """,
         tuple(params),
     )
@@ -188,12 +194,21 @@ def cash_history_report_rows(cursor, start, end, sucursal_id=None, cajero_id=Non
     ventas_cols = table_columns(cursor, "ventas")
     opened_expr = coalesce_existing(cols, ["cs.abierta_at", "cs.fecha_apertura", "cs.created_at"], "cs.created_at")
     closed_expr = coalesce_existing(cols, ["cs.cerrada_at", "cs.fecha_cierre", "cs.updated_at"], "cs.updated_at")
-    cash_user_expr = "COALESCE(cs.usuario_id, cs.usuario_apertura_id)" if "usuario_apertura_id" in cols else "cs.usuario_id"
+    cash_user_expr = coalesce_existing(cols, ["cs.usuario_id", "cs.usuario_apertura_id"], "cs.usuario_id")
     cash_location_expr = "cs.ubicacion_stock_id" if "ubicacion_stock_id" in cols else "NULL"
     initial_cash_expr = "COALESCE(cs.monto_inicial_efectivo, cs.monto_inicial, 0)" if "monto_inicial" in cols else "COALESCE(cs.monto_inicial_efectivo, 0)"
     initial_qr_expr = "COALESCE(cs.monto_inicial_qr, 0)" if "monto_inicial_qr" in cols else "0"
     final_cash_expr = "COALESCE(cs.monto_final_efectivo, 0)" if "monto_final_efectivo" in cols else "0"
     final_qr_expr = "COALESCE(cs.monto_final_qr, 0)" if "monto_final_qr" in cols else "0"
+    auto_expr = "COALESCE(cs.cierre_automatico,0)" if "cierre_automatico" in cols else "0"
+    if "observacion_cierre" in cols and "observacion" in cols:
+        note_expr = "COALESCE(cs.observacion_cierre, cs.observacion, '')"
+    elif "observacion_cierre" in cols:
+        note_expr = "COALESCE(cs.observacion_cierre, '')"
+    elif "observacion" in cols:
+        note_expr = "COALESCE(cs.observacion, '')"
+    else:
+        note_expr = "''"
     if "diferencia" in cols:
         diff_expr = "COALESCE(cs.diferencia, 0)"
     elif "diferencia_efectivo" in cols or "diferencia_qr" in cols:
@@ -232,6 +247,8 @@ def cash_history_report_rows(cursor, start, end, sucursal_id=None, cajero_id=Non
             {final_cash_expr} AS cierre_efectivo,
             {final_qr_expr} AS cierre_qr,
             {diff_expr} AS diferencia,
+            {auto_expr} AS cierre_automatico,
+            {note_expr} AS observacion_cierre,
             COALESCE((SELECT SUM(vp.monto) FROM ventas v JOIN venta_pagos vp ON vp.venta_id=v.id AND vp.cliente_id=v.cliente_id WHERE v.cliente_id=cs.cliente_id AND v.estado='PAGADA' AND {sale_match}), 0) AS total_recaudado
         FROM caja_sesiones cs
         LEFT JOIN usuarios caj ON caj.id={cash_user_expr}
