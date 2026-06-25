@@ -6,7 +6,10 @@
         <p class="eyebrow">Panel general</p>
         <h1>{% if role == 'VENDEDOR' %}Mis ventas{% elif role == 'CAJERO' %}Mis cobros{% elif role == 'ADMIN_TIENDA' %}Resumen de tienda{% else %}Resumen del negocio{% endif %}</h1>
     </div>
-    {% if can_create_sale %}<a class="btn btn--primary" href="{{ url_for('sales.index') }}">Nueva venta</a>{% endif %}
+    <div class="filters-inline">
+        {% if role in ['ADMIN_GENERAL_NEGOCIO','ADMIN_TIENDA'] %}<button class="btn btn--ghost" type="button" data-open-modal="cashHistoryModal">Historial cajas</button>{% endif %}
+        {% if can_create_sale %}<a class="btn btn--primary" href="{{ url_for('sales.index') }}">Nueva venta</a>{% endif %}
+    </div>
 </section>
 <section class="metric-grid">
     <article class="metric-card"><small>Productos activos</small><strong>{{ productos }}</strong></article>
@@ -38,6 +41,43 @@
         </table>
     </div>
 </section>
+<div class="modal" id="cashHistoryModal" aria-hidden="true">
+    <div class="modal__backdrop" data-close-modal></div>
+    <section class="modal__content" role="dialog" aria-modal="true">
+        <header class="modal__header"><div><p class="eyebrow">Reporte PDF</p><h2>Historial de cajas</h2></div><button class="icon-btn" type="button" data-close-modal>×</button></header>
+        <form class="form-stack" method="get" action="{{ url_for('dashboard.cash_history_pdf') }}" target="_blank">
+            <label>Periodo
+                <select name="periodo" id="cashHistoryPeriod">
+                    <option value="DIA">Día actual</option>
+                    <option value="SEMANA">Semana / últimos 7 días</option>
+                    <option value="MES">Mes actual</option>
+                    <option value="TRES_MESES">Últimos 3 meses</option>
+                    <option value="RANGO">Rango de fechas</option>
+                </select>
+            </label>
+            <div class="grid-two">
+                <label>Desde <input type="date" name="fecha_inicio"></label>
+                <label>Hasta <input type="date" name="fecha_fin"></label>
+            </div>
+            <div class="grid-two">
+                <label>Sucursal
+                    <select name="sucursal_id">
+                        <option value="">Sin filtro</option>
+                        {% for sucursal in sucursales_reporte %}<option value="{{ sucursal.id }}">{{ sucursal.nombre }}</option>{% endfor %}
+                    </select>
+                </label>
+                <label>Cajero / admin tienda
+                    <select name="cajero_id">
+                        <option value="">Sin filtro</option>
+                        {% for cajero in cajeros_reporte %}<option value="{{ cajero.id }}">{{ cajero.nombre_visible }} · {{ cajero.username }}</option>{% endfor %}
+                    </select>
+                </label>
+            </div>
+            <p class="page-note">El reporte respeta el alcance del rol. El administrador de tienda solo verá cajas de su sucursal.</p>
+            <button class="btn btn--primary" type="submit">Ver reporte PDF</button>
+        </form>
+    </section>
+</div>
 {% endif %}
 <section class="{% if role == 'VENDEDOR' %}panel{% else %}grid-two{% endif %}">
     {% if role != 'VENDEDOR' %}
