@@ -79,11 +79,16 @@ def ensure_sales_schema():
         if "numero_comprobante" not in columns:
             cursor.execute("ALTER TABLE ventas ADD COLUMN numero_comprobante BIGINT UNSIGNED NULL")
             columns.add("numero_comprobante")
+        if "caja_sesion_id" not in columns:
+            cursor.execute("ALTER TABLE ventas ADD COLUMN caja_sesion_id BIGINT UNSIGNED NULL")
+            columns.add("caja_sesion_id")
         cursor.execute("UPDATE ventas SET numero_comprobante = id WHERE numero_comprobante IS NULL")
         if not index_exists(cursor, "ventas", "idx_ventas_idempotency"):
             cursor.execute("ALTER TABLE ventas ADD INDEX idx_ventas_idempotency (cliente_id, idempotency_key)")
         if not index_exists(cursor, "ventas", "idx_ventas_numero_comprobante"):
             cursor.execute("ALTER TABLE ventas ADD INDEX idx_ventas_numero_comprobante (cliente_id, numero_comprobante)")
+        if not index_exists(cursor, "ventas", "idx_ventas_caja_sesion"):
+            cursor.execute("ALTER TABLE ventas ADD INDEX idx_ventas_caja_sesion (cliente_id, caja_sesion_id)")
     return True
 
 
@@ -315,7 +320,7 @@ def insert_payment(cursor, cliente_id, venta_id, metodo_pago, total):
 
 
 def confirm_sale_from_cart(*, cliente_id, sucursal_id, ubicacion_stock_id, cajero_id, vendedor_id,
-                           created_by, items, metodo_pago, idempotency_key, orden_id=None):
+                           created_by, items, metodo_pago, idempotency_key, orden_id=None, caja_sesion_id=None):
     if metodo_pago not in PAYMENT_METHODS:
         raise ValueError("Método de pago inválido.")
     if not idempotency_key:
@@ -344,16 +349,29 @@ def confirm_sale_from_cart(*, cliente_id, sucursal_id, ubicacion_stock_id, cajer
         descuento = subtotal - total
         for item in prepared:
             discount_stock(cursor, cliente_id, ubicacion_stock_id, item)
-        cursor.execute(
-            """
-            INSERT INTO ventas
-                (cliente_id, sucursal_id, ubicacion_stock_id, orden_venta_id, cajero_id, vendedor_id,
-                 numero_venta, fecha_venta, subtotal, descuento_total, total, estado, idempotency_key, created_at, updated_at)
-            VALUES (%s,%s,%s,%s,%s,%s,CONCAT('V-', DATE_FORMAT(NOW(), '%Y%m%d'), '-', UUID_SHORT()),
-                    NOW(),%s,%s,%s,'PAGADA',%s,NOW(),NOW())
-            """,
-            (cliente_id, sucursal_id, ubicacion_stock_id, orden_id, cajero_id, selected_seller_id, subtotal, descuento, total, idempotency_key),
-        )
+        venta_cols = table_columns(cursor, "ventas")
+        if "caja_sesion_id" in venta_cols:
+            cursor.execute(
+                """
+                INSERT INTO ventas
+                    (cliente_id, sucursal_id, ubicacion_stock_id, orden_venta_id, cajero_id, vendedor_id, caja_sesion_id,
+                     numero_venta, fecha_venta, subtotal, descuento_total, total, estado, idempotency_key, created_at, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,CONCAT('V-', DATE_FORMAT(NOW(), '%Y%m%d'), '-', UUID_SHORT()),
+                        NOW(),%s,%s,%s,'PAGADA',%s,NOW(),NOW())
+                """,
+                (cliente_id, sucursal_id, ubicacion_stock_id, orden_id, cajero_id, selected_seller_id, caja_sesion_id, subtotal, descuento, total, idempotency_key),
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO ventas
+                    (cliente_id, sucursal_id, ubicacion_stock_id, orden_venta_id, cajero_id, vendedor_id,
+                     numero_venta, fecha_venta, subtotal, descuento_total, total, estado, idempotency_key, created_at, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,CONCAT('V-', DATE_FORMAT(NOW(), '%Y%m%d'), '-', UUID_SHORT()),
+                        NOW(),%s,%s,%s,'PAGADA',%s,NOW(),NOW())
+                """,
+                (cliente_id, sucursal_id, ubicacion_stock_id, orden_id, cajero_id, selected_seller_id, subtotal, descuento, total, idempotency_key),
+            )
         venta_id = cursor.lastrowid
         numero_comprobante = assign_receipt_number(cursor, venta_id)
         for item in prepared:
@@ -378,7 +396,7 @@ def confirm_sale_from_cart(*, cliente_id, sucursal_id, ubicacion_stock_id, cajer
             )
         insert_payment(cursor, cliente_id, venta_id, metodo_pago, total)
         cursor.execute("UPDATE ordenes_venta SET estado='FACTURADA', cajero_id=%s, updated_at=NOW() WHERE id=%s", (cajero_id, orden_id))
-        log_audit(cursor, cliente_id=cliente_id, usuario_id=created_by, modulo="VENTAS", accion="CONFIRMAR_VENTA", tabla_afectada="ventas", registro_id=venta_id, valor_nuevo={"total": total, "metodo_pago": metodo_pago, "numero_comprobante": numero_comprobante, "vendedor_id": selected_seller_id})
+        log_audit(cursor, cliente_id=cliente_id, usuario_id=created_by, modulo="VENTAS", accion="CONFIRMAR_VENTA", tabla_afectada="ventas", registro_id=venta_id, valor_nuevo={"total": total, "metodo_pago": metodo_pago, "numero_comprobante": numero_comprobante, "vendedor_id": selected_seller_id, "caja_sesion_id": caja_sesion_id})
         cursor.execute("SELECT numero_venta, numero_comprobante FROM ventas WHERE id=%s", (venta_id,))
         row = cursor.fetchone()
         return {"venta_id": venta_id, "numero_venta": row["numero_venta"], "numero_comprobante": row.get("numero_comprobante"), "total": str(total), "duplicada": False}
