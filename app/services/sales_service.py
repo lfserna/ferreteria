@@ -1,5 +1,5 @@
 import re
-from decimal import Decimal
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
 from app.database import db_cursor, db_transaction
 from app.services.audit_service import log_audit
@@ -18,16 +18,6 @@ def whole_units(value, field_name="cantidad"):
         raise ValueError(f"La {field_name} debe ser un número entero.") from exc
     if decimal_value <= 0 or decimal_value != decimal_value.to_integral_value():
         raise ValueError(f"La {field_name} debe ser un número entero mayor a cero.")
-    return int(decimal_value)
-
-
-def nonnegative_whole_units(value, field_name="cantidad"):
-    try:
-        decimal_value = Decimal(str(value or "0"))
-    except Exception as exc:
-        raise ValueError(f"La {field_name} debe ser un número entero.") from exc
-    if decimal_value < 0 or decimal_value != decimal_value.to_integral_value():
-        raise ValueError(f"La {field_name} debe ser un número entero mayor o igual a cero.")
     return int(decimal_value)
 
 
@@ -86,9 +76,23 @@ def ensure_sales_schema():
         if "idempotency_key" not in columns:
             cursor.execute("ALTER TABLE ventas ADD COLUMN idempotency_key VARCHAR(120) NULL")
             columns.add("idempotency_key")
+        if "numero_comprobante" not in columns:
+            cursor.execute("ALTER TABLE ventas ADD COLUMN numero_comprobante BIGINT UNSIGNED NULL")
+            columns.add("numero_comprobante")
+        cursor.execute("UPDATE ventas SET numero_comprobante = id WHERE numero_comprobante IS NULL")
         if not index_exists(cursor, "ventas", "idx_ventas_idempotency"):
             cursor.execute("ALTER TABLE ventas ADD INDEX idx_ventas_idempotency (cliente_id, idempotency_key)")
+        if not index_exists(cursor, "ventas", "idx_ventas_numero_comprobante"):
+            cursor.execute("ALTER TABLE ventas ADD INDEX idx_ventas_numero_comprobante (cliente_id, numero_comprobante)")
     return True
+
+
+def assign_receipt_number(cursor, venta_id):
+    columns = table_columns(cursor, "ventas")
+    if "numero_comprobante" not in columns:
+        return venta_id
+    cursor.execute("UPDATE ventas SET numero_comprobante=%s WHERE id=%s AND numero_comprobante IS NULL", (venta_id, venta_id))
+    return venta_id
 
 
 def list_pending_orders(cliente_id: int, sucursal_id: int | None):
@@ -101,12 +105,14 @@ def list_pending_orders(cliente_id: int, sucursal_id: int | None):
         cursor.execute(
             f"""
             SELECT ov.id, ov.codigo_orden, ov.subtotal, ov.descuento_total, ov.total_estimado,
-                   ov.created_at, u.nombres AS vendedor_nombre, COUNT(od.id) AS items
+                   ov.created_at,
+                   COALESCE(CONCAT_WS(' ', u.nombres, u.apellido_paterno), u.username) AS vendedor_nombre,
+                   COUNT(od.id) AS items
             FROM ordenes_venta ov
             LEFT JOIN usuarios u ON u.id = ov.vendedor_id
             LEFT JOIN orden_venta_detalles od ON od.orden_venta_id = ov.id
             WHERE ov.cliente_id = %s AND ov.estado = 'ENVIADA_CAJA' {where_sucursal}
-            GROUP BY ov.id, u.nombres
+            GROUP BY ov.id, u.nombres, u.apellido_paterno, u.username
             ORDER BY ov.created_at ASC
             LIMIT 25
             """,
@@ -117,7 +123,17 @@ def list_pending_orders(cliente_id: int, sucursal_id: int | None):
 
 def get_order(cliente_id: int, orden_id: int):
     with db_cursor() as cursor:
-        cursor.execute("SELECT * FROM ordenes_venta WHERE cliente_id=%s AND id=%s LIMIT 1", (cliente_id, orden_id))
+        cursor.execute(
+            """
+            SELECT ov.*, COALESCE(CONCAT_WS(' ', u.nombres, u.apellido_paterno), u.username) AS vendedor_nombre,
+                   u.username AS vendedor_username
+            FROM ordenes_venta ov
+            LEFT JOIN usuarios u ON u.id = ov.vendedor_id
+            WHERE ov.cliente_id=%s AND ov.id=%s
+            LIMIT 1
+            """,
+            (cliente_id, orden_id),
+        )
         order = cursor.fetchone()
         if not order:
             return None
@@ -240,17 +256,18 @@ def confirm_sale_from_cart(*, cliente_id, sucursal_id, ubicacion_stock_id, cajer
     if not idempotency_key:
         raise ValueError("Falta la llave de idempotencia.")
     ensure_sales_schema()
+    vendedor_id = vendedor_id or cajero_id
     with db_transaction() as (cursor, _connection):
-        cursor.execute("SELECT id, numero_venta, total FROM ventas WHERE cliente_id=%s AND idempotency_key=%s LIMIT 1", (cliente_id, idempotency_key))
+        cursor.execute("SELECT id, numero_venta, numero_comprobante, total FROM ventas WHERE cliente_id=%s AND idempotency_key=%s LIMIT 1", (cliente_id, idempotency_key))
         existing = cursor.fetchone()
         if existing:
-            return {"venta_id": existing["id"], "numero_venta": existing["numero_venta"], "total": str(existing["total"]), "duplicada": True}
+            return {"venta_id": existing["id"], "numero_venta": existing["numero_venta"], "numero_comprobante": existing.get("numero_comprobante"), "total": str(existing["total"]), "duplicada": True}
         if orden_id:
             cursor.execute("SELECT * FROM ordenes_venta WHERE cliente_id=%s AND id=%s AND estado IN ('ENVIADA_CAJA','EN_REVISION_CAJA','APROBADA') FOR UPDATE", (cliente_id, orden_id))
             order = cursor.fetchone()
             if not order:
                 raise ValueError("La orden no existe o ya fue procesada.")
-            vendedor_id = order["vendedor_id"]
+            vendedor_id = order["vendedor_id"] or vendedor_id
             sucursal_id = order["sucursal_id"]
             ubicacion_stock_id = order["ubicacion_stock_id"]
             prepared = items_from_order(cursor, orden_id)
@@ -273,6 +290,7 @@ def confirm_sale_from_cart(*, cliente_id, sucursal_id, ubicacion_stock_id, cajer
             (cliente_id, sucursal_id, ubicacion_stock_id, orden_id, cajero_id, vendedor_id, subtotal, descuento, total, idempotency_key),
         )
         venta_id = cursor.lastrowid
+        numero_comprobante = assign_receipt_number(cursor, venta_id)
         for item in prepared:
             item_discount = (item["precio_estandar"] - item["precio_unitario"]) * item["cantidad"]
             item_subtotal = item["precio_unitario"] * item["cantidad"]
@@ -295,9 +313,10 @@ def confirm_sale_from_cart(*, cliente_id, sucursal_id, ubicacion_stock_id, cajer
             )
         insert_payment(cursor, cliente_id, venta_id, metodo_pago, total)
         cursor.execute("UPDATE ordenes_venta SET estado='FACTURADA', cajero_id=%s, updated_at=NOW() WHERE id=%s", (cajero_id, orden_id))
-        log_audit(cursor, cliente_id=cliente_id, usuario_id=created_by, modulo="VENTAS", accion="CONFIRMAR_VENTA", tabla_afectada="ventas", registro_id=venta_id, valor_nuevo={"total": total, "metodo_pago": metodo_pago})
-        cursor.execute("SELECT numero_venta FROM ventas WHERE id=%s", (venta_id,))
-        return {"venta_id": venta_id, "numero_venta": cursor.fetchone()["numero_venta"], "total": str(total), "duplicada": False}
+        log_audit(cursor, cliente_id=cliente_id, usuario_id=created_by, modulo="VENTAS", accion="CONFIRMAR_VENTA", tabla_afectada="ventas", registro_id=venta_id, valor_nuevo={"total": total, "metodo_pago": metodo_pago, "numero_comprobante": numero_comprobante})
+        cursor.execute("SELECT numero_venta, numero_comprobante FROM ventas WHERE id=%s", (venta_id,))
+        row = cursor.fetchone()
+        return {"venta_id": venta_id, "numero_venta": row["numero_venta"], "numero_comprobante": row.get("numero_comprobante"), "total": str(total), "duplicada": False}
 
 
 def insert_order_details(cursor, cliente_id, order_id, prepared):
@@ -367,19 +386,24 @@ def discount_stock(cursor, cliente_id, ubicacion_stock_id, item):
         raise ValueError(f"Stock inválido para {item['producto_nombre']}.") from exc
     if requested_decimal <= 0:
         raise ValueError(f"Cantidad inválida para {item['producto_nombre']}.")
-    stock_disponible = int(stock_decimal) if stock_decimal == stock_decimal.to_integral_value() else int(stock_decimal.to_integral_value(rounding='ROUND_FLOOR'))
-    cantidad_solicitada = int(requested_decimal) if requested_decimal == requested_decimal.to_integral_value() else int(requested_decimal.to_integral_value(rounding='ROUND_CEILING'))
+    stock_disponible = int(stock_decimal) if stock_decimal == stock_decimal.to_integral_value() else int(stock_decimal.to_integral_value(rounding=ROUND_FLOOR))
+    cantidad_solicitada = int(requested_decimal) if requested_decimal == requested_decimal.to_integral_value() else int(requested_decimal.to_integral_value(rounding=ROUND_CEILING))
     if stock_disponible < cantidad_solicitada:
         raise ValueError(f"Stock insuficiente para {item['producto_nombre']}. Disponible: {stock_disponible}. Solicitado: {cantidad_solicitada}.")
     cursor.execute("UPDATE inventarios SET cantidad_disponible = cantidad_disponible - %s, updated_at = NOW() WHERE id = %s", (cantidad_solicitada, inv["id"]))
 
 
 def get_sale_receipt(cliente_id: int, venta_id: int):
+    ensure_sales_schema()
     with db_cursor() as cursor:
         cursor.execute(
             """
             SELECT v.*, c.nombre_comercial AS cliente_nombre, s.nombre AS sucursal_nombre,
-                   caj.username AS cajero_username, ven.username AS vendedor_username, vp.metodo_pago
+                   caj.username AS cajero_username,
+                   COALESCE(CONCAT_WS(' ', caj.nombres, caj.apellido_paterno), caj.username) AS cajero_nombre,
+                   ven.username AS vendedor_username,
+                   COALESCE(CONCAT_WS(' ', ven.nombres, ven.apellido_paterno), ven.username) AS vendedor_nombre,
+                   vp.metodo_pago
             FROM ventas v
             JOIN clientes c ON c.id = v.cliente_id
             LEFT JOIN sucursales s ON s.id = v.sucursal_id
@@ -394,6 +418,8 @@ def get_sale_receipt(cliente_id: int, venta_id: int):
         sale = cursor.fetchone()
         if not sale:
             return None
+        if not sale.get("numero_comprobante"):
+            sale["numero_comprobante"] = assign_receipt_number(cursor, sale["id"])
         cursor.execute(
             """
             SELECT vd.*, p.nombre, p.codigo_producto, pp.nombre AS presentacion
