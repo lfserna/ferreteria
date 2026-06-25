@@ -95,6 +95,77 @@ def assign_receipt_number(cursor, venta_id):
     return venta_id
 
 
+def user_display_name(row):
+    if not row:
+        return "-"
+    parts = [row.get("nombres"), row.get("apellido_paterno")]
+    name = " ".join([part for part in parts if part])
+    return name or row.get("username") or "-"
+
+
+def list_available_sellers(cliente_id: int, sucursal_id: int | None = None):
+    with db_cursor() as cursor:
+        params = [cliente_id]
+        sucursal_filter = ""
+        if sucursal_id:
+            sucursal_filter = "AND (u.sucursal_id = %s OR ur.sucursal_id = %s OR u.sucursal_id IS NULL OR ur.sucursal_id IS NULL)"
+            params.extend([sucursal_id, sucursal_id])
+        cursor.execute(
+            f"""
+            SELECT DISTINCT u.id, u.username, u.nombres, u.apellido_paterno, u.sucursal_id
+            FROM usuarios u
+            JOIN usuario_roles ur ON ur.usuario_id = u.id AND ur.cliente_id = u.cliente_id AND ur.estado = 'ACTIVO'
+            JOIN roles r ON r.id = ur.rol_id AND r.estado = 'ACTIVO'
+            WHERE u.cliente_id = %s
+              AND u.estado = 'ACTIVO'
+              AND r.codigo = 'VENDEDOR'
+              {sucursal_filter}
+            ORDER BY u.nombres, u.apellido_paterno, u.username
+            """,
+            tuple(params),
+        )
+        sellers = cursor.fetchall()
+        for seller in sellers:
+            seller["nombre_visible"] = user_display_name(seller)
+        return sellers
+
+
+def validate_seller_id(cursor, cliente_id: int, seller_id):
+    if seller_id in (None, "", 0, "0"):
+        return None
+    try:
+        seller_id = int(seller_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Vendedor inválido.") from exc
+    cursor.execute(
+        """
+        SELECT id
+        FROM usuarios
+        WHERE cliente_id=%s AND id=%s AND estado='ACTIVO'
+        LIMIT 1
+        """,
+        (cliente_id, seller_id),
+    )
+    if not cursor.fetchone():
+        raise ValueError("El vendedor seleccionado no existe o no está activo.")
+    return seller_id
+
+
+def fetch_order_details(cursor, order_id):
+    cursor.execute(
+        """
+        SELECT od.*, p.nombre, p.codigo_producto, pp.nombre AS presentacion
+        FROM orden_venta_detalles od
+        JOIN productos p ON p.id = od.producto_id
+        JOIN producto_presentaciones pp ON pp.id = od.producto_presentacion_id
+        WHERE od.orden_venta_id = %s
+        ORDER BY od.id
+        """,
+        (order_id,),
+    )
+    return cursor.fetchall()
+
+
 def list_pending_orders(cliente_id: int, sucursal_id: int | None):
     with db_cursor() as cursor:
         params = [cliente_id]
@@ -105,8 +176,9 @@ def list_pending_orders(cliente_id: int, sucursal_id: int | None):
         cursor.execute(
             f"""
             SELECT ov.id, ov.codigo_orden, ov.subtotal, ov.descuento_total, ov.total_estimado,
-                   ov.created_at,
+                   ov.created_at, ov.vendedor_id,
                    COALESCE(CONCAT_WS(' ', u.nombres, u.apellido_paterno), u.username) AS vendedor_nombre,
+                   u.username AS vendedor_username,
                    COUNT(od.id) AS items
             FROM ordenes_venta ov
             LEFT JOIN usuarios u ON u.id = ov.vendedor_id
@@ -118,7 +190,10 @@ def list_pending_orders(cliente_id: int, sucursal_id: int | None):
             """,
             tuple(params),
         )
-        return cursor.fetchall()
+        orders = cursor.fetchall()
+        for order in orders:
+            order["detalles"] = fetch_order_details(cursor, order["id"])
+        return orders
 
 
 def get_order(cliente_id: int, orden_id: int):
@@ -137,18 +212,7 @@ def get_order(cliente_id: int, orden_id: int):
         order = cursor.fetchone()
         if not order:
             return None
-        cursor.execute(
-            """
-            SELECT od.*, p.nombre, p.codigo_producto, pp.nombre AS presentacion
-            FROM orden_venta_detalles od
-            JOIN productos p ON p.id = od.producto_id
-            JOIN producto_presentaciones pp ON pp.id = od.producto_presentacion_id
-            WHERE od.orden_venta_id = %s
-            ORDER BY od.id
-            """,
-            (orden_id,),
-        )
-        order["detalles"] = cursor.fetchall()
+        order["detalles"] = fetch_order_details(cursor, orden_id)
         return order
 
 
@@ -208,6 +272,7 @@ def create_order_from_cart(*, cliente_id, sucursal_id, ubicacion_stock_id, vende
     if not items:
         raise ValueError("El carrito está vacío.")
     with db_transaction() as (cursor, _connection):
+        vendedor_id = validate_seller_id(cursor, cliente_id, vendedor_id) or created_by
         prepared = prepare_items(cursor, cliente_id, items)
         subtotal = sum(i["precio_estandar"] * i["cantidad"] for i in prepared)
         total = sum(i["precio_unitario"] * i["cantidad"] for i in prepared)
@@ -256,8 +321,8 @@ def confirm_sale_from_cart(*, cliente_id, sucursal_id, ubicacion_stock_id, cajer
     if not idempotency_key:
         raise ValueError("Falta la llave de idempotencia.")
     ensure_sales_schema()
-    vendedor_id = vendedor_id or cajero_id
     with db_transaction() as (cursor, _connection):
+        selected_seller_id = validate_seller_id(cursor, cliente_id, vendedor_id)
         cursor.execute("SELECT id, numero_venta, numero_comprobante, total FROM ventas WHERE cliente_id=%s AND idempotency_key=%s LIMIT 1", (cliente_id, idempotency_key))
         existing = cursor.fetchone()
         if existing:
@@ -267,13 +332,13 @@ def confirm_sale_from_cart(*, cliente_id, sucursal_id, ubicacion_stock_id, cajer
             order = cursor.fetchone()
             if not order:
                 raise ValueError("La orden no existe o ya fue procesada.")
-            vendedor_id = order["vendedor_id"] or vendedor_id
+            selected_seller_id = order["vendedor_id"]
             sucursal_id = order["sucursal_id"]
             ubicacion_stock_id = order["ubicacion_stock_id"]
             prepared = items_from_order(cursor, orden_id)
         else:
             prepared = prepare_items(cursor, cliente_id, items)
-            orden_id = create_internal_order(cursor, cliente_id, sucursal_id, ubicacion_stock_id, vendedor_id, created_by, prepared)
+            orden_id = create_internal_order(cursor, cliente_id, sucursal_id, ubicacion_stock_id, selected_seller_id, created_by, prepared)
         subtotal = sum(i["precio_estandar"] * i["cantidad"] for i in prepared)
         total = sum(i["precio_unitario"] * i["cantidad"] for i in prepared)
         descuento = subtotal - total
@@ -287,7 +352,7 @@ def confirm_sale_from_cart(*, cliente_id, sucursal_id, ubicacion_stock_id, cajer
             VALUES (%s,%s,%s,%s,%s,%s,CONCAT('V-', DATE_FORMAT(NOW(), '%Y%m%d'), '-', UUID_SHORT()),
                     NOW(),%s,%s,%s,'PAGADA',%s,NOW(),NOW())
             """,
-            (cliente_id, sucursal_id, ubicacion_stock_id, orden_id, cajero_id, vendedor_id, subtotal, descuento, total, idempotency_key),
+            (cliente_id, sucursal_id, ubicacion_stock_id, orden_id, cajero_id, selected_seller_id, subtotal, descuento, total, idempotency_key),
         )
         venta_id = cursor.lastrowid
         numero_comprobante = assign_receipt_number(cursor, venta_id)
@@ -313,7 +378,7 @@ def confirm_sale_from_cart(*, cliente_id, sucursal_id, ubicacion_stock_id, cajer
             )
         insert_payment(cursor, cliente_id, venta_id, metodo_pago, total)
         cursor.execute("UPDATE ordenes_venta SET estado='FACTURADA', cajero_id=%s, updated_at=NOW() WHERE id=%s", (cajero_id, orden_id))
-        log_audit(cursor, cliente_id=cliente_id, usuario_id=created_by, modulo="VENTAS", accion="CONFIRMAR_VENTA", tabla_afectada="ventas", registro_id=venta_id, valor_nuevo={"total": total, "metodo_pago": metodo_pago, "numero_comprobante": numero_comprobante})
+        log_audit(cursor, cliente_id=cliente_id, usuario_id=created_by, modulo="VENTAS", accion="CONFIRMAR_VENTA", tabla_afectada="ventas", registro_id=venta_id, valor_nuevo={"total": total, "metodo_pago": metodo_pago, "numero_comprobante": numero_comprobante, "vendedor_id": selected_seller_id})
         cursor.execute("SELECT numero_venta, numero_comprobante FROM ventas WHERE id=%s", (venta_id,))
         row = cursor.fetchone()
         return {"venta_id": venta_id, "numero_venta": row["numero_venta"], "numero_comprobante": row.get("numero_comprobante"), "total": str(total), "duplicada": False}
