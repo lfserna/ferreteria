@@ -105,20 +105,55 @@ def update_user_limit(cliente_id: int, current_user_id: int, max_usuarios: int):
                   valor_anterior=previous, valor_nuevo={"max_usuarios": max_usuarios})
 
 
+def optional_user_field(user_cols, field_name, alias=None, default="NULL"):
+    alias = alias or field_name
+    if field_name in user_cols:
+        return f"u.{field_name} AS {alias}"
+    return f"{default} AS {alias}"
+
+
+def first_existing_scope_expr(user_cols, role_cols, field_name):
+    candidates = []
+    if field_name in role_cols:
+        candidates.append(f"ur.{field_name}")
+    if field_name in user_cols:
+        candidates.append(f"u.{field_name}")
+    if not candidates:
+        return "NULL"
+    if len(candidates) == 1:
+        return candidates[0]
+    return f"COALESCE({', '.join(candidates)})"
+
+
 def list_users(cliente_id: int):
     with db_cursor() as cursor:
+        user_cols = table_columns(cursor, "usuarios")
+        role_cols = table_columns(cursor, "usuario_roles")
+        sucursal_expr = first_existing_scope_expr(user_cols, role_cols, "sucursal_id")
+        almacen_expr = first_existing_scope_expr(user_cols, role_cols, "almacen_id")
+        deleted_filter = "u.deleted_at IS NULL" if "deleted_at" in user_cols else "1=1"
+        order_expr = "u.created_at DESC, u.id DESC" if "created_at" in user_cols else "u.id DESC"
         cursor.execute(
-            """
-            SELECT u.id, u.username, u.nombres, u.apellido_paterno, u.apellido_materno,
-                   u.edad, u.celular, u.email, u.estado, r.nombre AS rol,
-                   s.nombre AS sucursal, a.nombre AS almacen
+            f"""
+            SELECT u.id,
+                   {optional_user_field(user_cols, 'username')},
+                   {optional_user_field(user_cols, 'nombres')},
+                   {optional_user_field(user_cols, 'apellido_paterno')},
+                   {optional_user_field(user_cols, 'apellido_materno')},
+                   {optional_user_field(user_cols, 'edad')},
+                   {optional_user_field(user_cols, 'celular')},
+                   {optional_user_field(user_cols, 'email')},
+                   {optional_user_field(user_cols, 'estado', default="'ACTIVO'")},
+                   r.nombre AS rol,
+                   s.nombre AS sucursal,
+                   a.nombre AS almacen
             FROM usuarios u
             LEFT JOIN usuario_roles ur ON ur.usuario_id = u.id AND ur.estado = 'ACTIVO'
             LEFT JOIN roles r ON r.id = ur.rol_id
-            LEFT JOIN sucursales s ON s.id = COALESCE(ur.sucursal_id, u.sucursal_id)
-            LEFT JOIN almacenes a ON a.id = COALESCE(ur.almacen_id, u.almacen_id)
-            WHERE u.cliente_id = %s AND u.deleted_at IS NULL
-            ORDER BY u.created_at DESC, u.id DESC
+            LEFT JOIN sucursales s ON s.id = {sucursal_expr}
+            LEFT JOIN almacenes a ON a.id = {almacen_expr}
+            WHERE u.cliente_id = %s AND {deleted_filter}
+            ORDER BY {order_expr}
             """,
             (cliente_id,),
         )
