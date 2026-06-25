@@ -6,7 +6,14 @@ from xhtml2pdf import pisa
 from app.services.cash_service import cash_summary, close_cash_session, open_cash_session, require_open_cash
 from app.services.context_service import get_primary_stock_location
 from app.services.product_service import search_products
-from app.services.sales_service import confirm_sale_from_cart, create_order_from_cart, get_order, get_sale_receipt, list_pending_orders
+from app.services.sales_service import (
+    confirm_sale_from_cart,
+    create_order_from_cart,
+    get_order,
+    get_sale_receipt,
+    list_available_sellers,
+    list_pending_orders,
+)
 from app.utils.security import login_required
 from app.utils.serializers import to_jsonable
 
@@ -34,6 +41,16 @@ def current_seller_name():
     return name or g.user.get("username") or "-"
 
 
+def selected_seller_id_from_payload(payload):
+    raw = payload.get("vendedor_id")
+    if raw in (None, "", 0, "0"):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 @sales_bp.route("")
 @login_required
 def index():
@@ -43,18 +60,22 @@ def index():
     can_confirm = can_confirm_sales()
     can_send_order = g.user["rol_codigo"] in {"VENDEDOR", "ADMIN_TIENDA"}
     pending_orders = list_pending_orders(g.user["cliente_id"], g.user.get("sucursal_id")) if can_confirm else []
+    sellers = list_available_sellers(g.user["cliente_id"], g.user.get("sucursal_id")) if can_confirm else []
     caja = cash_summary(g.user["cliente_id"], g.user["id"], ubicacion_stock_id) if can_confirm else None
+    default_seller_id = g.user["id"] if g.user.get("rol_codigo") == "VENDEDOR" else ""
+    default_seller_name = current_seller_name() if default_seller_id else "Sin vendedor"
     return render_template(
         "sales/index.html",
         can_confirm=can_confirm,
         can_send_order=can_send_order,
         pending_orders=pending_orders,
+        sellers=sellers,
         caja=caja,
         caja_abierta=bool(caja),
         requiere_caja=can_confirm,
         ubicacion_stock_id=ubicacion_stock_id,
-        seller_id=g.user["id"],
-        seller_name=current_seller_name(),
+        seller_id=default_seller_id,
+        seller_name=default_seller_name,
     )
 
 
@@ -153,7 +174,7 @@ def confirmar():
     try:
         require_open_cash(g.user["cliente_id"], g.user["id"], ubicacion_stock_id)
         result = confirm_sale_from_cart(cliente_id=g.user["cliente_id"], sucursal_id=g.user.get("sucursal_id"), ubicacion_stock_id=ubicacion_stock_id,
-                                        cajero_id=g.user["id"], vendedor_id=g.user["id"], created_by=g.user["id"], items=payload.get("items", []),
+                                        cajero_id=g.user["id"], vendedor_id=selected_seller_id_from_payload(payload), created_by=g.user["id"], items=payload.get("items", []),
                                         metodo_pago=payload.get("metodo_pago"), idempotency_key=payload.get("idempotency_key"), orden_id=payload.get("orden_id"))
         return jsonify(to_jsonable(result)), 201
     except ValueError as exc:
