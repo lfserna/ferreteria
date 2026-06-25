@@ -20,6 +20,37 @@ def whole_units(value, field_name="cantidad"):
     return int(decimal_value)
 
 
+def table_columns(cursor, table_name):
+    cursor.execute(f"SHOW COLUMNS FROM {table_name}")
+    return {row["Field"] for row in cursor.fetchall()}
+
+
+def index_exists(cursor, table_name, index_name):
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM INFORMATION_SCHEMA.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = %s
+          AND INDEX_NAME = %s
+        """,
+        (table_name, index_name),
+    )
+    row = cursor.fetchone() or {}
+    return int(row.get("total") or 0) > 0
+
+
+def ensure_sales_schema():
+    with db_cursor(commit=True) as cursor:
+        columns = table_columns(cursor, "ventas")
+        if "idempotency_key" not in columns:
+            cursor.execute("ALTER TABLE ventas ADD COLUMN idempotency_key VARCHAR(120) NULL")
+            columns.add("idempotency_key")
+        if not index_exists(cursor, "ventas", "idx_ventas_idempotency"):
+            cursor.execute("ALTER TABLE ventas ADD INDEX idx_ventas_idempotency (cliente_id, idempotency_key)")
+    return True
+
+
 def list_pending_orders(cliente_id: int, sucursal_id: int | None):
     with db_cursor() as cursor:
         params = [cliente_id]
@@ -75,18 +106,24 @@ def prepare_items(cursor, cliente_id, items):
         cursor.execute(
             """
             SELECT p.id AS producto_id, p.nombre AS producto_nombre, pp.id AS presentacion_id,
-                   pp.nombre AS presentacion_nombre, pp.factor_unidad_base,
+                   pp.nombre AS presentacion_nombre, COALESCE(pp.factor_unidad_base, 1) AS factor_unidad_base,
                    pr.precio_venta_estandar, pr.precio_minimo_venta
             FROM productos p
-            JOIN producto_presentaciones pp ON pp.producto_id = p.id AND pp.estado = 'ACTIVO'
-            JOIN producto_precios pr ON pr.producto_presentacion_id = pp.id AND pr.estado = 'ACTIVO'
-            WHERE p.cliente_id = %s AND p.id = %s AND pp.id = %s AND p.estado = 'ACTIVO'
+            JOIN producto_presentaciones pp ON pp.producto_id = p.id AND pp.id = %s
+            LEFT JOIN producto_precios pr ON pr.id=(
+                SELECT pr2.id
+                FROM producto_precios pr2
+                WHERE pr2.producto_presentacion_id=pp.id
+                ORDER BY CASE WHEN pr2.estado='ACTIVO' THEN 0 ELSE 1 END, pr2.id DESC
+                LIMIT 1
+            )
+            WHERE p.cliente_id = %s AND p.id = %s AND p.estado = 'ACTIVO'
             LIMIT 1
             """,
-            (cliente_id, producto_id, presentacion_id),
+            (presentacion_id, cliente_id, producto_id),
         )
         product = cursor.fetchone()
-        if not product:
+        if not product or product.get("precio_venta_estandar") is None or product.get("precio_minimo_venta") is None:
             raise ValueError("Producto inválido o sin precio de venta configurado.")
         factor = whole_units(product["factor_unidad_base"], "factor de presentación")
         precio_estandar = money(product["precio_venta_estandar"])
@@ -141,6 +178,7 @@ def confirm_sale_from_cart(*, cliente_id, sucursal_id, ubicacion_stock_id, cajer
         raise ValueError("Método de pago inválido.")
     if not idempotency_key:
         raise ValueError("Falta la llave de idempotencia.")
+    ensure_sales_schema()
     with db_transaction() as (cursor, _connection):
         cursor.execute("SELECT id, numero_venta, total FROM ventas WHERE cliente_id=%s AND idempotency_key=%s LIMIT 1", (cliente_id, idempotency_key))
         existing = cursor.fetchone()
