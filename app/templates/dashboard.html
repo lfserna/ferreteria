@@ -1,15 +1,46 @@
 {% extends "base.html" %}
 {% block title %}Inicio · Ferretería{% endblock %}
 {% block content %}
-<section class="page-heading"><div><p class="eyebrow">Panel general</p><h1>Resumen del negocio</h1></div><a class="btn btn--primary" href="{{ url_for('sales.index') }}">Nueva venta</a></section>
+<section class="page-heading">
+    <div>
+        <p class="eyebrow">Panel general</p>
+        <h1>{% if role == 'VENDEDOR' %}Mis ventas{% elif role == 'CAJERO' %}Mis cobros{% elif role == 'ADMIN_TIENDA' %}Resumen de tienda{% else %}Resumen del negocio{% endif %}</h1>
+    </div>
+    {% if can_create_sale %}<a class="btn btn--primary" href="{{ url_for('sales.index') }}">Nueva venta</a>{% endif %}
+</section>
 <section class="metric-grid">
     <article class="metric-card"><small>Productos activos</small><strong>{{ productos }}</strong></article>
-    <article class="metric-card"><small>Ventas de hoy</small><strong>Bs {{ '%.2f'|format(ventas_hoy) }}</strong></article>
-    <article class="metric-card"><small>Transacciones hoy</small><strong>{{ transacciones_hoy }}</strong></article>
+    <article class="metric-card"><small>{% if role in ['VENDEDOR','CAJERO'] %}Mis ventas de hoy{% elif role == 'ADMIN_TIENDA' %}Ventas tienda hoy{% else %}Ventas de hoy{% endif %}</small><strong>Bs {{ '%.2f'|format(ventas_hoy) }}</strong></article>
+    <article class="metric-card"><small>{% if role in ['VENDEDOR','CAJERO'] %}Mis transacciones{% else %}Transacciones hoy{% endif %}</small><strong>{{ transacciones_hoy }}</strong></article>
     <article class="metric-card metric-card--warn"><small>Stock bajo</small><strong>{{ stock_bajo }}</strong></article>
 </section>
+{% if role in ['ADMIN_GENERAL_NEGOCIO','ADMIN_TIENDA'] %}
+<section class="panel">
+    <h2>Cajas abiertas</h2>
+    <div class="responsive-table">
+        <table>
+            <thead><tr><th>Caja</th><th>Sucursal</th><th>Cajero</th><th>Abierta desde</th><th>Efectivo</th><th>QR</th><th>Total recaudado</th></tr></thead>
+            <tbody>
+                {% for caja in cajas_abiertas %}
+                <tr>
+                    <td>#{{ caja.id }}</td>
+                    <td>{{ caja.sucursal_nombre or '-' }}</td>
+                    <td>{{ caja.cajero_nombre or caja.cajero_username or '-' }}</td>
+                    <td>{{ caja.abierta_at }}</td>
+                    <td>Bs {{ '%.2f'|format(caja.total_efectivo) }}</td>
+                    <td>Bs {{ '%.2f'|format(caja.total_qr) }}</td>
+                    <td>Bs {{ '%.2f'|format(caja.total_recaudado) }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7">No hay cajas abiertas.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endif %}
 <section class="grid-two">
     <article class="panel"><h2>Alertas activas</h2>{% if alertas %}<div class="stack-list">{% for alerta in alertas %}<div class="list-item"><strong>{{ alerta.titulo }}</strong><p>{{ alerta.mensaje }}</p><small>{{ alerta.prioridad }}</small></div>{% endfor %}</div>{% else %}<p class="empty">No hay alertas activas.</p>{% endif %}</article>
-    <article class="panel"><h2>Últimas ventas</h2><div class="responsive-table"><table><thead><tr><th>Comprobante</th><th>Sucursal</th><th>Cajero</th><th>Total</th></tr></thead><tbody>{% for venta in ultimas_ventas %}<tr><td><a href="{{ url_for('sales.comprobante', venta_id=venta.id) }}">{{ venta.numero_venta }}</a></td><td>{{ venta.sucursal or '-' }}</td><td>{{ venta.cajero or '-' }}</td><td>Bs {{ '%.2f'|format(venta.total) }}</td></tr>{% else %}<tr><td colspan="4">Sin ventas registradas.</td></tr>{% endfor %}</tbody></table></div></article>
+    <article class="panel"><h2>{% if role == 'VENDEDOR' %}Mis últimas ventas{% elif role == 'CAJERO' %}Mis últimos cobros{% elif role == 'ADMIN_TIENDA' %}Últimas ventas de tienda{% else %}Últimas ventas{% endif %}</h2><div class="responsive-table"><table><thead><tr><th>Comprobante</th><th>Sucursal</th><th>Cajero</th><th>Vendedor</th><th>Total</th></tr></thead><tbody>{% for venta in ultimas_ventas %}<tr><td><a href="{{ url_for('sales.comprobante', venta_id=venta.id) }}">{% if venta.numero_comprobante %}{{ '%06d'|format(venta.numero_comprobante) }}{% else %}{{ venta.numero_venta }}{% endif %}</a></td><td>{{ venta.sucursal or '-' }}</td><td>{{ venta.cajero or '-' }}</td><td>{{ venta.vendedor or '-' }}</td><td>Bs {{ '%.2f'|format(venta.total) }}</td></tr>{% else %}<tr><td colspan="5">Sin ventas registradas.</td></tr>{% endfor %}</tbody></table></div></article>
 </section>
 {% endblock %}
