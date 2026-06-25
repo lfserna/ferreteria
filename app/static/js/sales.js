@@ -15,6 +15,10 @@ function saleMoney(value) {
   return `Bs ${Number(value || 0).toFixed(2)}`;
 }
 
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
 function currentLayout() {
   return document.querySelector('.sale-layout');
 }
@@ -124,9 +128,9 @@ function renderCart() {
           <div style="min-width:0;flex:1">
             <div style="display:flex;gap:6px;align-items:center">
               <button class="remove-item" type="button" data-remove-item="${index}" aria-label="Eliminar producto" title="Eliminar" style="width:26px;height:26px;line-height:1;padding:0;border-radius:8px">🗑</button>
-              <strong style="font-size:13px;font-weight:500">${item.nombre}</strong>
+              <strong style="font-size:13px;font-weight:500">${esc(item.nombre)}</strong>
             </div>
-            <small>${item.presentacion} · ${item.codigo_producto || ''}</small>
+            <small>${esc(item.presentacion)} · ${esc(item.codigo_producto || '')}</small>
           </div>
           <span style="font-size:12px">${saleMoney(item.precio_unitario * item.cantidad)}</span>
         </div>
@@ -147,6 +151,72 @@ function renderCart() {
   $('#cartTotal').textContent = saleMoney(t.total);
 }
 
+function setText(selector, value) {
+  const node = $(selector);
+  if (node) node.textContent = value;
+}
+
+function updateCashView(caja) {
+  if (!caja || !caja.session) return;
+  const session = caja.session;
+  const initialCash = Number(session.monto_inicial_efectivo || session.monto_inicial || 0);
+  const initialQr = Number(session.monto_inicial_qr || 0);
+  const salesCash = Number(caja.ventas_efectivo || 0);
+  const salesQr = Number(caja.ventas_qr || 0);
+  const expectedCash = Number(caja.esperado_efectivo || 0);
+  const expectedQr = Number(caja.esperado_qr || 0);
+  setText('#cashQuickInitialCash', saleMoney(initialCash));
+  setText('#cashQuickInitialQr', saleMoney(initialQr));
+  setText('#cashQuickExpectedCash', saleMoney(expectedCash));
+  setText('#cashQuickExpectedQr', saleMoney(expectedQr));
+  setText('#cashCloseInitialCash', saleMoney(initialCash));
+  setText('#cashCloseInitialQr', saleMoney(initialQr));
+  setText('#cashCloseSalesCash', saleMoney(salesCash));
+  setText('#cashCloseSalesQr', saleMoney(salesQr));
+  setText('#cashCloseExpectedCash', saleMoney(expectedCash));
+  setText('#cashCloseExpectedQr', saleMoney(expectedQr));
+  const form = $('#cashCloseForm');
+  const cash = $('#cashFinalCash');
+  const qr = $('#cashFinalQr');
+  if (form) {
+    form.dataset.expectedCash = expectedCash.toFixed(2);
+    form.dataset.expectedQr = expectedQr.toFixed(2);
+  }
+  if (cash && document.activeElement !== cash) cash.value = expectedCash.toFixed(2);
+  if (qr && document.activeElement !== qr) qr.value = expectedQr.toFixed(2);
+  if (typeof window.bindCashCloseDifference === 'function') window.bindCashCloseDifference();
+}
+
+function renderPendingOrders(orders) {
+  const panel = $('#pendingOrdersPanel');
+  const list = $('#pendingOrdersList');
+  if (!panel || !list) return;
+  const rows = Array.isArray(orders) ? orders : [];
+  panel.hidden = rows.length === 0;
+  list.innerHTML = rows.map(order => {
+    const detalles = Array.isArray(order.detalles) ? order.detalles : [];
+    const preview = detalles.slice(0, 4).map(item => `<small style="display:block">${parseInt(item.cantidad || 0, 10)} × ${esc(item.nombre)} · ${saleMoney(item.precio_unitario)}</small>`).join('');
+    const extra = detalles.length > 4 ? `<small>+ ${detalles.length - 4} productos más</small>` : '';
+    return `<article class="order-chip" data-pending-order="${order.id}" style="text-align:left;min-width:260px;max-width:360px">
+      <strong>${esc(order.codigo_orden)}</strong>
+      <small>${parseInt(order.items || detalles.length || 0, 10)} items · ${esc(order.vendedor_nombre || 'Sin vendedor')} · ${saleMoney(order.total_estimado)}</small>
+      <div style="margin-top:6px">${preview}${extra}</div>
+      <button class="btn btn--ghost btn--block" type="button" data-load-order="${order.id}" style="margin-top:8px">Cargar carrito</button>
+    </article>`;
+  }).join('');
+}
+
+async function refreshSalesState() {
+  if (currentLayout()?.dataset.canConfirm !== '1') return;
+  try {
+    const response = await fetch('/ventas/api/estado', { headers: { 'Accept': 'application/json' } });
+    if (!response.ok) return;
+    const data = await response.json();
+    updateCashView(data.caja);
+    renderPendingOrders(data.pending_orders);
+  } catch (error) {}
+}
+
 async function searchProducts() {
   const q = $('#saleSearch').value.trim();
   const response = await fetch(`/ventas/api/productos?q=${encodeURIComponent(q)}`);
@@ -157,7 +227,7 @@ async function searchProducts() {
     const stockLocal = parseInt(product.stock_local || 0, 10);
     const otras = product.stock_otras_ubicaciones || 'Sin disponibilidad en otras ubicaciones';
     const stockClass = stockLocal > 0 ? 'stock' : 'stock danger-text';
-    return `<article class="product-card"><div class="product-card__top"><div><h3>${product.nombre}</h3><span class="code">${product.codigo_producto || ''} · ${product.presentacion || 'Unidad'}</span></div><span class="price">${vendible ? saleMoney(product.precio_venta_estandar) : 'Sin precio'}</span></div><small>${product.descripcion || ''}</small><span class="${stockClass}" title="Otras sucursales/almacenes: ${otras}">Stock en esta sucursal: ${stockLocal}</span><small title="${product.stock_ubicaciones || ''}">Pasa el mouse para ver otras disponibilidades.</small>${vendible ? `<button class="btn btn--ghost" type="button" data-add-product='${JSON.stringify(product).replaceAll("'", "&apos;")}'>Añadir</button>` : '<button class="btn btn--ghost" type="button" disabled>Falta precio</button>'}</article>`;
+    return `<article class="product-card"><div class="product-card__top"><div><h3>${esc(product.nombre)}</h3><span class="code">${esc(product.codigo_producto || '')} · ${esc(product.presentacion || 'Unidad')}</span></div><span class="price">${vendible ? saleMoney(product.precio_venta_estandar) : 'Sin precio'}</span></div><small>${esc(product.descripcion || '')}</small><span class="${stockClass}" title="Otras sucursales/almacenes: ${esc(otras)}">Stock en esta sucursal: ${stockLocal}</span><small title="${esc(product.stock_ubicaciones || '')}">Pasa el mouse para ver otras disponibilidades.</small>${vendible ? `<button class="btn btn--ghost" type="button" data-add-product='${JSON.stringify(product).replaceAll("'", "&apos;")}'>Añadir</button>` : '<button class="btn btn--ghost" type="button" disabled>Falta precio</button>'}</article>`;
   }).join('') || '<p class="empty">No se encontraron productos.</p>';
 }
 
@@ -173,7 +243,7 @@ function openCheckout() {
   }
   saleState.idempotencyKey = newIdempotencyKey();
   const preview = $('#checkoutPreview');
-  preview.innerHTML = saleState.cart.map(item => `<div class="checkout-row"><span>${item.cantidad} × ${item.nombre} (${item.presentacion})</span><span>${saleMoney(item.precio_unitario * item.cantidad)}</span></div>`).join('') + `<div class="checkout-row"><span>Total</span><span>${saleMoney(totals().total)}</span></div>`;
+  preview.innerHTML = saleState.cart.map(item => `<div class="checkout-row"><span>${item.cantidad} × ${esc(item.nombre)} (${esc(item.presentacion)})</span><span>${saleMoney(item.precio_unitario * item.cantidad)}</span></div>`).join('') + `<div class="checkout-row"><span>Total</span><span>${saleMoney(totals().total)}</span></div>`;
   $('#saleResult').hidden = true;
   $('#confirmSaleBtn').disabled = false;
   $('#confirmSaleBtn').textContent = 'Confirmar pago';
@@ -235,9 +305,10 @@ async function confirmSale() {
     if (!response.ok) throw new Error(data.error || 'No se pudo confirmar la venta.');
     const comprobante = data.numero_comprobante ? `Comprobante ${String(data.numero_comprobante).padStart(6, '0')}` : data.numero_venta;
     const receiptUrl = `/ventas/${data.venta_id}/comprobante`;
-    window.open(receiptUrl, '_blank', 'noopener');
     $('#saleResult').hidden = false;
-    $('#saleResult').innerHTML = `Venta confirmada: <span>${comprobante}</span> por ${saleMoney(data.total)}.<br><a href="${receiptUrl}" target="_blank">Ver comprobante</a> · <a href="/ventas/${data.venta_id}/comprobante-pdf" target="_blank">Abrir PDF</a>`;
+    $('#saleResult').innerHTML = `Venta confirmada: <span>${esc(comprobante)}</span> por ${saleMoney(data.total)}.<br><a href="${receiptUrl}" target="_blank">Imprimir comprobante</a> · <a href="/ventas/${data.venta_id}/comprobante-pdf" target="_blank">Abrir PDF</a>`;
+    updateCashView(data.caja);
+    renderPendingOrders(data.pending_orders);
     button.textContent = 'Venta confirmada';
     button.disabled = true;
     saleState.cart = [];
@@ -257,6 +328,7 @@ async function loadOrder(orderId) {
   const order = await response.json();
   if (!response.ok) {
     alert(order.error || 'No se pudo cargar la orden.');
+    refreshSalesState();
     return;
   }
   saleState.orderId = order.id;
@@ -278,10 +350,19 @@ async function loadOrder(orderId) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
+function bindPendingOrderClicks() {
+  $('#pendingOrdersList')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-load-order]');
+    if (!button) return;
+    loadOrder(button.dataset.loadOrder);
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   initSeller();
   renderCart();
   searchProducts();
+  refreshSalesState();
   $('#saleSearch')?.addEventListener('input', debounce(searchProducts, 220));
   document.querySelector('#sellerChipBox')?.addEventListener('click', event => {
     const chip = event.target.closest('[data-seller-chip]');
@@ -345,5 +426,6 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#openCashModalBtn')?.addEventListener('click', () => document.querySelector('#cashOpenModal')?.classList.add('is-open'));
   $('#openCloseCashModal')?.addEventListener('click', () => document.querySelector('#cashCloseModal')?.classList.add('is-open'));
   document.querySelector('[data-choice-group="payment"]')?.addEventListener('choice:change', event => { saleState.paymentMethod = event.detail.value; });
-  document.querySelectorAll('[data-load-order]').forEach(button => { button.addEventListener('click', () => loadOrder(button.dataset.loadOrder)); });
+  bindPendingOrderClicks();
+  if (currentLayout()?.dataset.canConfirm === '1') setInterval(refreshSalesState, 12000);
 });
