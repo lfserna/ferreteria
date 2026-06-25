@@ -20,6 +20,16 @@ def whole_units(value, field_name="cantidad"):
     return int(decimal_value)
 
 
+def nonnegative_whole_units(value, field_name="cantidad"):
+    try:
+        decimal_value = Decimal(str(value or "0"))
+    except Exception as exc:
+        raise ValueError(f"La {field_name} debe ser un número entero.") from exc
+    if decimal_value < 0 or decimal_value != decimal_value.to_integral_value():
+        raise ValueError(f"La {field_name} debe ser un número entero mayor o igual a cero.")
+    return int(decimal_value)
+
+
 def table_columns(cursor, table_name):
     cursor.execute(f"SHOW COLUMNS FROM {table_name}")
     return {row["Field"] for row in cursor.fetchall()}
@@ -299,9 +309,11 @@ def discount_stock(cursor, cliente_id, ubicacion_stock_id, item):
     inv = cursor.fetchone()
     if not inv:
         raise ValueError(f"No existe stock configurado para {item['producto_nombre']} en esta ubicación.")
-    if whole_units(inv["cantidad_disponible"], "stock disponible") < item["cantidad_base"]:
-        raise ValueError(f"Stock insuficiente para {item['producto_nombre']}.")
-    cursor.execute("UPDATE inventarios SET cantidad_disponible = cantidad_disponible - %s, updated_at = NOW() WHERE id = %s", (item["cantidad_base"], inv["id"]))
+    stock_disponible = nonnegative_whole_units(inv["cantidad_disponible"], "stock disponible")
+    cantidad_solicitada = nonnegative_whole_units(item["cantidad_base"], "cantidad solicitada")
+    if stock_disponible < cantidad_solicitada:
+        raise ValueError(f"Stock insuficiente para {item['producto_nombre']}. Disponible: {stock_disponible}. Solicitado: {cantidad_solicitada}.")
+    cursor.execute("UPDATE inventarios SET cantidad_disponible = cantidad_disponible - %s, updated_at = NOW() WHERE id = %s", (cantidad_solicitada, inv["id"]))
 
 
 def get_sale_receipt(cliente_id: int, venta_id: int):
