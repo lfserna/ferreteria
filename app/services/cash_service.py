@@ -39,15 +39,39 @@ def ensure_cash_tables():
         migrate_cash_session_table(cursor)
 
 
-def existing_columns(cursor, table_name):
+def table_exists(cursor, table_name):
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = %s
+        """,
+        (table_name,),
+    )
+    row = cursor.fetchone() or {}
+    return int(row.get("total") or 0) > 0
+
+
+def column_info(cursor, table_name):
     cursor.execute(f"SHOW COLUMNS FROM {table_name}")
-    return {row["Field"] for row in cursor.fetchall()}
+    return {row["Field"]: row for row in cursor.fetchall()}
+
+
+def existing_columns(cursor, table_name):
+    return set(column_info(cursor, table_name).keys())
 
 
 def add_column_if_missing(cursor, columns, name, definition):
     if name not in columns:
         cursor.execute(f"ALTER TABLE caja_sesiones ADD COLUMN {name} {definition}")
         columns.add(name)
+
+
+def make_column_nullable(cursor, table_name, columns_info, name, definition):
+    info = columns_info.get(name)
+    if info and str(info.get("Null", "")).upper() == "NO" and info.get("Default") is None and name != "id":
+        cursor.execute(f"ALTER TABLE {table_name} MODIFY COLUMN {name} {definition}")
 
 
 def add_index_if_missing(cursor, index_name, definition):
@@ -85,11 +109,67 @@ def migrate_cash_session_table(cursor):
     add_column_if_missing(cursor, columns, "observacion_cierre", "TEXT NULL")
     add_column_if_missing(cursor, columns, "created_at", "DATETIME NULL")
     add_column_if_missing(cursor, columns, "updated_at", "DATETIME NULL")
+    info = column_info(cursor, "caja_sesiones")
+    if "caja_id" in info:
+        make_column_nullable(cursor, "caja_sesiones", info, "caja_id", "BIGINT UNSIGNED NULL")
     cursor.execute("UPDATE caja_sesiones SET fecha_operacion = COALESCE(fecha_operacion, CURDATE()) WHERE fecha_operacion IS NULL")
     cursor.execute("UPDATE caja_sesiones SET abierta_at = COALESCE(abierta_at, created_at, NOW()) WHERE abierta_at IS NULL")
     cursor.execute("UPDATE caja_sesiones SET created_at = COALESCE(created_at, abierta_at, NOW()) WHERE created_at IS NULL")
     add_index_if_missing(cursor, "idx_caja_sesion_abierta", "(cliente_id, usuario_id, estado)")
     add_index_if_missing(cursor, "idx_caja_sesion_fecha", "(cliente_id, fecha_operacion)")
+
+
+def get_location_context(cursor, ubicacion_stock_id):
+    if not ubicacion_stock_id:
+        return {}
+    cursor.execute(
+        """
+        SELECT id, cliente_id, sucursal_id, almacen_id, nombre
+        FROM ubicaciones_stock
+        WHERE id=%s
+        LIMIT 1
+        """,
+        (ubicacion_stock_id,),
+    )
+    return cursor.fetchone() or {}
+
+
+def find_cashbox_id(cursor, cliente_id, ubicacion_stock_id):
+    if not table_exists(cursor, "cajas"):
+        return None
+    cols = existing_columns(cursor, "cajas")
+    location = get_location_context(cursor, ubicacion_stock_id)
+    filters = ["cliente_id=%s"] if "cliente_id" in cols else ["1=1"]
+    params = [cliente_id] if "cliente_id" in cols else []
+
+    candidates = []
+    if "ubicacion_stock_id" in cols and ubicacion_stock_id:
+        candidates.append(("ubicacion_stock_id=%s", [ubicacion_stock_id]))
+    if "sucursal_id" in cols and location.get("sucursal_id"):
+        candidates.append(("sucursal_id=%s", [location["sucursal_id"]]))
+    if "almacen_id" in cols and location.get("almacen_id"):
+        candidates.append(("almacen_id=%s", [location["almacen_id"]]))
+
+    state_filter = ""
+    if "estado" in cols:
+        state_filter = " AND (estado='ACTIVO' OR estado='ABIERTA' OR estado IS NULL)"
+
+    for condition, extra_params in candidates:
+        cursor.execute(
+            f"SELECT id FROM cajas WHERE {' AND '.join(filters)} AND {condition}{state_filter} ORDER BY id ASC LIMIT 1",
+            tuple(params + extra_params),
+        )
+        row = cursor.fetchone()
+        if row:
+            return row["id"]
+
+    cursor.execute(f"SELECT id FROM cajas WHERE {' AND '.join(filters)}{state_filter} ORDER BY id ASC LIMIT 1", tuple(params))
+    row = cursor.fetchone()
+    return row["id"] if row else None
+
+
+def caja_id_column_exists(cursor):
+    return "caja_id" in existing_columns(cursor, "caja_sesiones")
 
 
 def get_open_cash_session(cliente_id, usuario_id, ubicacion_stock_id=None):
@@ -131,14 +211,31 @@ def open_cash_session(cliente_id, usuario_id, ubicacion_stock_id, monto_inicial_
         existing = cursor.fetchone()
         if existing:
             raise ValueError("Ya tienes una caja abierta. Debes cerrarla antes de abrir otra.")
+
+        insert_columns = [
+            "cliente_id", "usuario_id", "ubicacion_stock_id", "fecha_operacion", "estado",
+            "monto_inicial_efectivo", "monto_inicial_qr", "abierta_at", "observacion_apertura", "created_at", "updated_at"
+        ]
+        values = [cliente_id, usuario_id, ubicacion_stock_id, "CURDATE()", "ABIERTA", monto_efectivo, monto_qr, "NOW()", observacion, "NOW()", "NOW()"]
+        raw_sql_positions = {3, 7, 9, 10}
+
+        if caja_id_column_exists(cursor):
+            insert_columns.insert(0, "caja_id")
+            values.insert(0, find_cashbox_id(cursor, cliente_id, ubicacion_stock_id))
+            raw_sql_positions = {index + 1 for index in raw_sql_positions}
+
+        placeholders = []
+        params = []
+        for index, value in enumerate(values):
+            if index in raw_sql_positions:
+                placeholders.append(value)
+            else:
+                placeholders.append("%s")
+                params.append(value)
+
         cursor.execute(
-            """
-            INSERT INTO caja_sesiones
-                (cliente_id, usuario_id, ubicacion_stock_id, fecha_operacion, estado,
-                 monto_inicial_efectivo, monto_inicial_qr, abierta_at, observacion_apertura, created_at, updated_at)
-            VALUES (%s,%s,%s,CURDATE(),'ABIERTA',%s,%s,NOW(),%s,NOW(),NOW())
-            """,
-            (cliente_id, usuario_id, ubicacion_stock_id, monto_efectivo, monto_qr, observacion),
+            f"INSERT INTO caja_sesiones ({', '.join(insert_columns)}) VALUES ({', '.join(placeholders)})",
+            tuple(params),
         )
         session_id = cursor.lastrowid
         log_audit(cursor, cliente_id=cliente_id, usuario_id=usuario_id, modulo="CAJA", accion="ABRIR_CAJA", tabla_afectada="caja_sesiones", registro_id=session_id, valor_nuevo={"monto_inicial_efectivo": str(monto_efectivo), "monto_inicial_qr": str(monto_qr)})
