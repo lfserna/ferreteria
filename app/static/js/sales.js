@@ -7,7 +7,6 @@ const saleState = {
   selectedSellerName: 'Sin vendedor',
   defaultSellerId: '',
   defaultSellerName: 'Sin vendedor',
-  sellerLocked: false,
 };
 
 const $ = selector => document.querySelector(selector);
@@ -33,45 +32,45 @@ function cashIsOpen() {
   return currentLayout()?.dataset.cashOpen === '1';
 }
 
-function sellerSelect() {
-  return $('#saleSellerSelect');
+function updateSellerChips() {
+  document.querySelectorAll('[data-seller-chip]').forEach(chip => {
+    const selected = String(chip.dataset.sellerChip || '') === String(saleState.selectedSellerId || '');
+    chip.classList.toggle('is-selected', selected);
+    chip.style.background = selected ? 'var(--primary-soft, rgba(0,0,0,.08))' : 'transparent';
+    chip.style.borderColor = selected ? 'var(--primary, #111)' : 'var(--border)';
+  });
 }
 
-function ensureSellerOption(id, name) {
-  const select = sellerSelect();
-  if (!select || !id) return;
-  if ([...select.options].some(option => option.value === String(id))) return;
-  const option = document.createElement('option');
-  option.value = String(id);
-  option.textContent = `${name || 'Vendedor'} · ID ${id}`;
-  select.appendChild(option);
-}
-
-function setSeller(id, name, locked = false) {
+function setSeller(id, name) {
   saleState.selectedSellerId = id ? String(id) : '';
   saleState.selectedSellerName = id ? (name || `ID ${id}`) : 'Sin vendedor';
-  saleState.sellerLocked = locked;
-  ensureSellerOption(saleState.selectedSellerId, saleState.selectedSellerName);
-  const select = sellerSelect();
-  if (select) {
-    select.value = saleState.selectedSellerId;
-    select.disabled = locked;
-  }
-  const hint = $('#sellerPickerHint');
-  if (hint) hint.textContent = locked ? 'Este carrito fue enviado por un vendedor; se conservará ese vendedor.' : 'Puedes dejar la venta sin vendedor o elegir uno disponible.';
   updateSellerLabel();
+  updateSellerChips();
+}
+
+function toggleSeller(id, name) {
+  const normalizedId = id ? String(id) : '';
+  if (!normalizedId || saleState.selectedSellerId === normalizedId) {
+    setSeller('', 'Sin vendedor');
+    return;
+  }
+  setSeller(normalizedId, name || `ID ${normalizedId}`);
 }
 
 function initSeller() {
   const layout = currentLayout();
   saleState.defaultSellerId = layout?.dataset.currentSellerId || '';
   saleState.defaultSellerName = layout?.dataset.currentSellerName || 'Sin vendedor';
-  setSeller(saleState.defaultSellerId, saleState.defaultSellerName, false);
+  setSeller(saleState.defaultSellerId, saleState.defaultSellerName);
 }
 
 function updateSellerLabel() {
   const label = $('#cartSellerLabel');
   if (label) label.textContent = `Vendedor: ${saleState.selectedSellerName || 'Sin vendedor'}${saleState.selectedSellerId ? ` · ID ${saleState.selectedSellerId}` : ''}`;
+}
+
+function resetSellerToDefault() {
+  setSeller(saleState.defaultSellerId, saleState.defaultSellerName);
 }
 
 function normalizeItem(product) {
@@ -99,7 +98,6 @@ function addToCart(product) {
   if (existing) existing.cantidad += 1;
   else saleState.cart.push(normalizeItem(product));
   saleState.orderId = null;
-  if (saleState.sellerLocked) setSeller(saleState.defaultSellerId, saleState.defaultSellerName, false);
   renderCart();
 }
 
@@ -173,10 +171,11 @@ function openCheckout() {
   }
   saleState.idempotencyKey = newIdempotencyKey();
   const preview = $('#checkoutPreview');
-  preview.innerHTML = `<div class="checkout-row"><span>Vendedor</span><span>${saleState.selectedSellerName || 'Sin vendedor'}${saleState.selectedSellerId ? ` · ID ${saleState.selectedSellerId}` : ''}</span></div>` + saleState.cart.map(item => `<div class="checkout-row"><span>${item.cantidad} × ${item.nombre} (${item.presentacion})</span><span>${saleMoney(item.precio_unitario * item.cantidad)}</span></div>`).join('') + `<div class="checkout-row"><span>Total</span><span>${saleMoney(totals().total)}</span></div>`;
+  preview.innerHTML = saleState.cart.map(item => `<div class="checkout-row"><span>${item.cantidad} × ${item.nombre} (${item.presentacion})</span><span>${saleMoney(item.precio_unitario * item.cantidad)}</span></div>`).join('') + `<div class="checkout-row"><span>Total</span><span>${saleMoney(totals().total)}</span></div>`;
   $('#saleResult').hidden = true;
   $('#confirmSaleBtn').disabled = false;
   $('#confirmSaleBtn').textContent = 'Confirmar pago';
+  updateSellerChips();
   $('#checkoutModal').classList.add('is-open');
 }
 
@@ -239,7 +238,7 @@ async function confirmSale() {
     button.disabled = true;
     saleState.cart = [];
     saleState.orderId = null;
-    setSeller(saleState.defaultSellerId, saleState.defaultSellerName, false);
+    resetSellerToDefault();
     renderCart();
     searchProducts();
   } catch (error) {
@@ -257,7 +256,7 @@ async function loadOrder(orderId) {
     return;
   }
   saleState.orderId = order.id;
-  setSeller(order.vendedor_id || '', order.vendedor_nombre || order.vendedor_username || 'Sin vendedor', Boolean(order.vendedor_id));
+  setSeller(order.vendedor_id || '', order.vendedor_nombre || order.vendedor_username || 'Sin vendedor');
   saleState.cart = order.detalles.map(item => ({
     producto_id: item.producto_id,
     presentacion_id: item.producto_presentacion_id,
@@ -280,12 +279,10 @@ document.addEventListener('DOMContentLoaded', () => {
   renderCart();
   searchProducts();
   $('#saleSearch')?.addEventListener('input', debounce(searchProducts, 220));
-  sellerSelect()?.addEventListener('change', event => {
-    if (saleState.sellerLocked) return;
-    const option = event.target.selectedOptions[0];
-    setSeller(event.target.value, option ? option.textContent.replace(/\s+·\s+ID\s+\d+$/, '') : 'Sin vendedor', false);
-    const preview = $('#checkoutPreview');
-    if (preview && !preview.closest('.modal')?.classList.contains('is-open')) return;
+  document.querySelector('#sellerChipBox')?.addEventListener('click', event => {
+    const chip = event.target.closest('[data-seller-chip]');
+    if (!chip) return;
+    toggleSeller(chip.dataset.sellerChip || '', chip.dataset.sellerName || 'Sin vendedor');
   });
   $('#saleResults')?.addEventListener('click', event => {
     const button = event.target.closest('[data-add-product]');
@@ -306,7 +303,6 @@ document.addEventListener('DOMContentLoaded', () => {
       event.target.value = item.precio_unitario;
     }
     saleState.orderId = null;
-    if (saleState.sellerLocked) setSeller(saleState.defaultSellerId, saleState.defaultSellerName, false);
     renderCart();
   });
   $('#cartItems')?.addEventListener('click', event => {
@@ -317,7 +313,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const index = Number(minus.dataset.qtyMinus);
       saleState.cart[index].cantidad = Math.max(1, (saleState.cart[index].cantidad || 1) - 1);
       saleState.orderId = null;
-      if (saleState.sellerLocked) setSeller(saleState.defaultSellerId, saleState.defaultSellerName, false);
       renderCart();
       return;
     }
@@ -325,21 +320,19 @@ document.addEventListener('DOMContentLoaded', () => {
       const index = Number(plus.dataset.qtyPlus);
       saleState.cart[index].cantidad = (saleState.cart[index].cantidad || 1) + 1;
       saleState.orderId = null;
-      if (saleState.sellerLocked) setSeller(saleState.defaultSellerId, saleState.defaultSellerName, false);
       renderCart();
       return;
     }
     if (remove) {
       saleState.cart.splice(Number(remove.dataset.removeItem), 1);
       saleState.orderId = null;
-      if (saleState.sellerLocked) setSeller(saleState.defaultSellerId, saleState.defaultSellerName, false);
       renderCart();
     }
   });
   $('#clearCartBtn')?.addEventListener('click', () => {
     saleState.cart = [];
     saleState.orderId = null;
-    setSeller(saleState.defaultSellerId, saleState.defaultSellerName, false);
+    resetSellerToDefault();
     renderCart();
   });
   $('#checkoutBtn')?.addEventListener('click', openCheckout);
