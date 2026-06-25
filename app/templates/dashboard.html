@@ -47,7 +47,7 @@
         <header class="modal__header"><div><p class="eyebrow">Reporte PDF</p><h2>Historial de cajas</h2></div><button class="icon-btn" type="button" data-close-modal>×</button></header>
         <form class="form-stack" method="get" action="{{ url_for('dashboard.cash_history_pdf') }}" target="_blank">
             <label>Periodo
-                <select name="periodo" id="cashHistoryPeriod">
+                <select name="periodo">
                     <option value="DIA">Día actual</option>
                     <option value="SEMANA">Semana / últimos 7 días</option>
                     <option value="MES">Mes actual</option>
@@ -55,10 +55,7 @@
                     <option value="RANGO">Rango de fechas</option>
                 </select>
             </label>
-            <div class="grid-two">
-                <label>Desde <input type="date" name="fecha_inicio"></label>
-                <label>Hasta <input type="date" name="fecha_fin"></label>
-            </div>
+            <div class="grid-two"><label>Desde <input type="date" name="fecha_inicio"></label><label>Hasta <input type="date" name="fecha_fin"></label></div>
             <div class="grid-two">
                 <label>Sucursal
                     <select name="sucursal_id">
@@ -78,11 +75,55 @@
         </form>
     </section>
 </div>
+<div class="modal" id="salesReportModal" aria-hidden="true">
+    <div class="modal__backdrop" data-close-modal></div>
+    <section class="modal__content" role="dialog" aria-modal="true">
+        <header class="modal__header"><div><p class="eyebrow">Reporte PDF</p><h2>Reporte de ventas</h2></div><button class="icon-btn" type="button" data-close-modal>×</button></header>
+        <form class="form-stack" method="get" action="{{ url_for('dashboard.sales_report_pdf') }}" target="_blank">
+            <label>Periodo
+                <select name="periodo">
+                    <option value="DIA">Día actual</option>
+                    <option value="SEMANA">Semana / últimos 7 días</option>
+                    <option value="MES">Mes actual</option>
+                    <option value="TRES_MESES">Últimos 3 meses</option>
+                    <option value="RANGO">Rango de fechas</option>
+                </select>
+            </label>
+            <div class="grid-two"><label>Desde <input type="date" name="fecha_inicio"></label><label>Hasta <input type="date" name="fecha_fin"></label></div>
+            <div class="grid-two">
+                {% if role == 'ADMIN_GENERAL_NEGOCIO' %}
+                <label>Sucursal
+                    <select name="sucursal_id">
+                        <option value="">Sin filtro</option>
+                        {% for sucursal in sucursales_reporte %}<option value="{{ sucursal.id }}">{{ sucursal.nombre }}</option>{% endfor %}
+                    </select>
+                </label>
+                {% else %}
+                <label>Sucursal <input value="{{ current_user.sucursal_nombre or 'Mi tienda' }}" disabled></label>
+                {% endif %}
+                <label>Cajero
+                    <select name="cajero_id">
+                        <option value="">Sin filtro</option>
+                        {% for cajero in cajeros_reporte %}<option value="{{ cajero.id }}">{{ cajero.nombre_visible }} · {{ cajero.username }}</option>{% endfor %}
+                    </select>
+                </label>
+            </div>
+            <p class="page-note">El administrador de tienda solo puede generar reportes de su sucursal. El administrador general puede elegir sucursal o dejar sin filtro.</p>
+            <button class="btn btn--primary" type="submit">Ver reporte PDF</button>
+        </form>
+    </section>
+</div>
 {% endif %}
 <section class="{% if role == 'VENDEDOR' %}panel{% else %}grid-two{% endif %}">
     {% if role != 'VENDEDOR' %}
     <article class="panel"><h2>Alertas activas</h2>{% if alertas %}<div class="stack-list">{% for alerta in alertas %}<div class="list-item"><strong>{{ alerta.titulo }}</strong><p>{{ alerta.mensaje }}</p><small>{{ alerta.prioridad }}</small></div>{% endfor %}</div>{% else %}<p class="empty">No hay alertas activas.</p>{% endif %}</article>
     {% endif %}
-    <article class="{% if role != 'VENDEDOR' %}panel{% endif %}"><h2>{% if role == 'VENDEDOR' %}Mis últimas ventas{% elif role == 'CAJERO' %}Mis últimos cobros{% elif role == 'ADMIN_TIENDA' %}Últimas ventas de tienda{% else %}Últimas ventas{% endif %}</h2><div class="responsive-table"><table><thead><tr><th>Comprobante</th><th>Sucursal</th><th>Cajero</th><th>Vendedor</th><th>Total</th></tr></thead><tbody>{% for venta in ultimas_ventas %}<tr><td><a href="{{ url_for('sales.comprobante', venta_id=venta.id) }}">{% if venta.numero_comprobante %}{{ '%06d'|format(venta.numero_comprobante) }}{% else %}{{ venta.numero_venta }}{% endif %}</a></td><td>{{ venta.sucursal or '-' }}</td><td>{{ venta.cajero or '-' }}</td><td>{{ venta.vendedor or '-' }}</td><td>Bs {{ '%.2f'|format(venta.total) }}</td></tr>{% else %}<tr><td colspan="5">Sin ventas registradas.</td></tr>{% endfor %}</tbody></table></div></article>
+    <article class="{% if role != 'VENDEDOR' %}panel{% endif %}">
+        <div class="cart-heading">
+            <h2>{% if role == 'VENDEDOR' %}Mis últimas ventas{% elif role == 'CAJERO' %}Mis últimos cobros{% elif role == 'ADMIN_TIENDA' %}Últimas ventas de tienda{% else %}Últimas ventas{% endif %}</h2>
+            {% if role in ['ADMIN_GENERAL_NEGOCIO','ADMIN_TIENDA'] %}<button class="btn btn--ghost" type="button" data-open-modal="salesReportModal">Reporte ventas</button>{% endif %}
+        </div>
+        <div class="responsive-table"><table><thead><tr><th>Comprobante</th><th>Sucursal</th><th>Cajero</th><th>Vendedor</th><th>Total</th></tr></thead><tbody>{% for venta in ultimas_ventas %}<tr><td><a href="{{ url_for('sales.comprobante', venta_id=venta.id) }}">{% if venta.numero_comprobante %}{{ '%06d'|format(venta.numero_comprobante) }}{% else %}{{ venta.numero_venta }}{% endif %}</a></td><td>{{ venta.sucursal or '-' }}</td><td>{{ venta.cajero or '-' }}</td><td>{{ venta.vendedor or '-' }}</td><td>Bs {{ '%.2f'|format(venta.total) }}</td></tr>{% else %}<tr><td colspan="5">Sin ventas registradas.</td></tr>{% endfor %}</tbody></table></div>
+    </article>
 </section>
 {% endblock %}
