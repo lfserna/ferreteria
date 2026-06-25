@@ -3,41 +3,41 @@
 <head>
 <meta charset="utf-8">
 <style>
-@page { size: A4 landscape; margin: 9mm; }
-body { font-family: DejaVu Sans, Arial, sans-serif; font-size: 8px; color: #111; }
+@page { size: A4 portrait; margin: 9mm; }
+body { font-family: DejaVu Sans, Arial, sans-serif; font-size: 7.5px; color: #111; }
 p { margin: 1px 0; }
-.page { border: 1px solid #111; min-height: 185mm; padding: 8px; }
+.page { border: 1px solid #111; min-height: 270mm; padding: 7px; }
 .header-table { width: 100%; border-collapse: collapse; margin-bottom: 5px; }
 .header-table td { vertical-align: top; border: 0; padding: 0; }
-.brand { font-size: 18px; font-weight: bold; color: #1d4ed8; margin-bottom: 10px; }
+.brand { font-size: 16px; font-weight: bold; color: #1d4ed8; margin-bottom: 8px; }
 .business { font-size: 8px; line-height: 1.25; }
 .title { text-align: center; padding-top: 6px; }
-.title h1 { margin: 0; font-size: 16px; letter-spacing: .5px; }
-.title strong { display: block; margin-top: 2px; font-size: 9px; }
+.title h1 { margin: 0; font-size: 14px; letter-spacing: .5px; }
+.title strong { display: block; margin-top: 2px; font-size: 8px; }
 .title span { display: block; margin-top: 2px; }
-.right-head { text-align: right; font-size: 8px; }
-.report-box { border: 1px dotted #111; text-align: center; margin-left: 8px; margin-top: 4px; padding: 4px 2px; }
-.report-box .num { font-size: 12px; font-weight: bold; }
+.right-head { text-align: right; font-size: 7.5px; }
+.report-box { border: 1px dotted #111; text-align: center; margin-left: 6px; margin-top: 4px; padding: 4px 2px; }
+.report-box .num { font-size: 11px; font-weight: bold; }
 .report-box .range { border-top: 1px dotted #111; margin-top: 3px; padding-top: 3px; font-weight: bold; }
 .meta-line { border-top: 1px solid #111; border-bottom: 1px solid #111; padding: 4px 0; margin: 4px 0 0; }
 .meta-table { width: 100%; border-collapse: collapse; }
 .meta-table td { border: 0; padding: 1px 2px; }
-.report { width: 100%; border-collapse: collapse; margin-top: 4px; }
-.report th { border-bottom: 1px solid #111; padding: 3px 3px; font-size: 7px; text-align: left; }
-.report td { border-bottom: 1px solid #d9d9d9; padding: 3px; vertical-align: top; }
+.report { width: 100%; border-collapse: collapse; margin-top: 4px; table-layout: fixed; }
+.report th { border-bottom: 1px solid #111; padding: 2px 2px; font-size: 6.4px; text-align: left; }
+.report td { border-bottom: 1px solid #d9d9d9; padding: 2px; vertical-align: top; }
 .report .num { text-align: right; }
-.report .box { width: 6%; }
-.report .store { width: 12%; }
+.report .box { width: 5%; }
+.report .store { width: 10%; }
 .report .cashier { width: 12%; }
-.report .date { width: 9%; }
+.report .date { width: 10%; }
 .report .money { width: 8%; }
 .report .diff { width: 8%; }
-.report .total { width: 9%; }
-.row-sub { color: #444; font-size: 7px; margin-top: 2px; }
+.report .total { width: 10%; }
+.row-sub { color: #444; font-size: 6px; margin-top: 1px; }
 .totals { width: 100%; border-collapse: collapse; margin-top: 6px; }
 .totals td { border: 0; padding: 2px 4px; }
 .totals .label { text-align: right; font-size: 8px; }
-.totals .value { text-align: right; font-size: 11px; font-weight: bold; border-top: 1px solid #111; }
+.totals .value { text-align: right; font-size: 12px; font-weight: bold; border-top: 1px solid #111; }
 .filters { margin-top: 5px; font-size: 8px; border-top: 1px dotted #333; padding-top: 4px; }
 .empty { padding: 18px; text-align: center; border-bottom: 1px solid #d9d9d9; }
 </style>
@@ -86,17 +86,17 @@ p { margin: 1px 0; }
   <table class="report">
     <thead>
       <tr>
-        <th class="box">Nº Caja</th>
+        <th class="box">Nº</th>
         <th class="store">Sucursal</th>
         <th class="cashier">Cajero</th>
         <th class="date">Abierto</th>
         <th class="date">Cerrado</th>
-        <th class="money num">Apert. Efec.</th>
+        <th class="money num">Apert. Ef.</th>
         <th class="money num">Apert. QR</th>
-        <th class="money num">Cierre Efec.</th>
+        <th class="money num">Cierre Ef.</th>
         <th class="money num">Cierre QR</th>
         <th class="diff num">Dif.</th>
-        <th class="total num">Total recaudado</th>
+        <th class="total num">Recaudado</th>
       </tr>
     </thead>
     <tbody>
@@ -106,8 +106,8 @@ p { margin: 1px 0; }
         <td class="box">{{ row.numero_caja }}</td>
         <td class="store">{{ row.sucursal or '-' }}</td>
         <td class="cashier">{{ row.cajero or '-' }}<div class="row-sub">ID {{ row.cajero_id or '-' }}</div></td>
-        <td class="date">{% if row.abierto %}{{ row.abierto.strftime('%d/%m/%Y %H:%M') }}{% else %}-{% endif %}</td>
-        <td class="date">{% if row.cerrado %}{{ row.cerrado.strftime('%d/%m/%Y %H:%M') }}{% else %}Abierta{% endif %}</td>
+        <td class="date">{% if row.abierto %}{{ row.abierto.strftime('%d/%m/%y %H:%M') }}{% else %}-{% endif %}</td>
+        <td class="date">{% if row.cerrado %}{{ row.cerrado.strftime('%d/%m/%y %H:%M') }}{% else %}Abierta{% endif %}</td>
         <td class="money num">{{ '%.2f'|format(row.apertura_efectivo or 0) }}</td>
         <td class="money num">{{ '%.2f'|format(row.apertura_qr or 0) }}</td>
         <td class="money num">{{ '%.2f'|format(row.cierre_efectivo or 0) }}</td>
@@ -124,27 +124,19 @@ p { margin: 1px 0; }
 
   <table class="totals">
     <tr>
-      <td style="width: 28%;"></td>
-      <td class="label">Apert. efectivo</td>
-      <td class="label">Apert. QR</td>
-      <td class="label">Cierre efectivo</td>
-      <td class="label">Cierre QR</td>
-      <td class="label">Diferencias</td>
-      <td class="label">Total recaudado</td>
+      <td style="width: 58%;"></td>
+      <td class="label" style="width: 20%;">Diferencias</td>
+      <td class="label" style="width: 22%;">Total recaudado</td>
     </tr>
     <tr>
       <td></td>
-      <td class="value">{{ '%.2f'|format(totals.apertura_efectivo or 0) }}</td>
-      <td class="value">{{ '%.2f'|format(totals.apertura_qr or 0) }}</td>
-      <td class="value">{{ '%.2f'|format(totals.cierre_efectivo or 0) }}</td>
-      <td class="value">{{ '%.2f'|format(totals.cierre_qr or 0) }}</td>
       <td class="value">{{ '%.2f'|format(totals.diferencia or 0) }}</td>
       <td class="value">{{ '%.2f'|format(totals.total_recaudado or 0) }}</td>
     </tr>
   </table>
 
   <div class="filters">
-    <p><strong>Resumen:</strong> cajas encontradas {{ rows|length }} · total recaudado Bs {{ '%.2f'|format(totals.total_recaudado or 0) }}</p>
+    <p><strong>Resumen:</strong> cajas encontradas {{ rows|length }} · diferencias Bs {{ '%.2f'|format(totals.diferencia or 0) }} · total recaudado Bs {{ '%.2f'|format(totals.total_recaudado or 0) }}</p>
   </div>
 </div>
 </body>
