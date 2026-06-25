@@ -1,4 +1,4 @@
-from flask import Blueprint, flash, g, redirect, render_template, request, url_for
+from flask import Blueprint, flash, g, redirect, render_template, request, session, url_for
 
 from app.services.user_service import (
     DEFAULT_USER_PASSWORD,
@@ -27,8 +27,9 @@ def index():
     quota = get_user_quota(g.user["cliente_id"])
     options = get_form_options(g.user["cliente_id"])
     users = list_users(g.user["cliente_id"])
+    created_user = session.pop("new_user_info", None)
     return render_template("users/index.html", users=users, quota=quota, options=options,
-                           default_password=DEFAULT_USER_PASSWORD)
+                           default_password=DEFAULT_USER_PASSWORD, created_user=created_user)
 
 
 @users_bp.route("/crear", methods=["POST"])
@@ -39,7 +40,12 @@ def crear():
         return redirect(url_for("dashboard.index"))
     try:
         result = create_user(g.user["cliente_id"], g.user["id"], request.form)
-        flash(f"Usuario creado: {result['username']}. Contraseña por defecto: {result['default_password']}", "success")
+        session["new_user_info"] = {
+            "usuario": result["username"],
+            "clave": DEFAULT_USER_PASSWORD,
+            "nombre": f"{request.form.get('nombres', '').strip()} {request.form.get('apellido_paterno', '').strip()}".strip(),
+        }
+        flash("Usuario creado correctamente.", "success")
     except ValueError as exc:
         flash(str(exc), "danger")
     return redirect(url_for("users.index"))
