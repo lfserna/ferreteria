@@ -51,6 +51,17 @@ def selected_seller_id_from_payload(payload):
         return None
 
 
+def sales_state_payload(ubicacion_stock_id=None):
+    if not can_confirm_sales():
+        return {"caja": None, "pending_orders": []}
+    if ubicacion_stock_id is None:
+        ubicacion_stock_id = current_stock_location()
+    return {
+        "caja": cash_summary(g.user["cliente_id"], g.user["id"], ubicacion_stock_id),
+        "pending_orders": list_pending_orders(g.user["cliente_id"], g.user.get("sucursal_id")),
+    }
+
+
 @sales_bp.route("")
 @login_required
 def index():
@@ -134,6 +145,14 @@ def api_productos():
     return jsonify(to_jsonable(products))
 
 
+@sales_bp.route("/api/estado")
+@login_required
+def api_estado():
+    if not can_access_sales():
+        return jsonify({"error": "Tu rol no tiene acceso a ventas."}), 403
+    return jsonify(to_jsonable(sales_state_payload()))
+
+
 @sales_bp.route("/api/ordenes/<int:orden_id>")
 @login_required
 def api_orden(orden_id):
@@ -176,6 +195,7 @@ def confirmar():
         result = confirm_sale_from_cart(cliente_id=g.user["cliente_id"], sucursal_id=g.user.get("sucursal_id"), ubicacion_stock_id=ubicacion_stock_id,
                                         cajero_id=g.user["id"], vendedor_id=selected_seller_id_from_payload(payload), created_by=g.user["id"], items=payload.get("items", []),
                                         metodo_pago=payload.get("metodo_pago"), idempotency_key=payload.get("idempotency_key"), orden_id=payload.get("orden_id"), caja_sesion_id=(caja.get("session") or {}).get("id"))
+        result.update(sales_state_payload(ubicacion_stock_id))
         return jsonify(to_jsonable(result)), 201
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
