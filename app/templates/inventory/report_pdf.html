@@ -3,51 +3,139 @@
 <head>
 <meta charset="utf-8">
 <style>
-@page { size: A4 portrait; margin: 9mm; }
+@page { size: A4 portrait; margin: 10mm; }
 body { font-family: DejaVu Sans, Arial, sans-serif; font-size: 9px; color: #111; }
 p { margin: 1px 0; }
-.page { border: 0.6px solid #111; min-height: 274mm; padding: 8px; }
-.header-table, .meta-table, .totals { width: 100%; border-collapse: collapse; }
-.header-table td, .meta-table td, .totals td { border: 0; padding: 1px 2px; vertical-align: top; }
+.page { border: 1px solid #111; min-height: 270mm; padding: 8px; }
+.header-table { width: 100%; border-collapse: collapse; margin-bottom: 5px; }
+.header-table td { vertical-align: top; border: 0; padding: 0; }
 .brand { font-size: 18px; font-weight: bold; color: #1d4ed8; margin-bottom: 12px; }
 .business { font-size: 9px; line-height: 1.25; }
 .title { text-align: center; padding-top: 6px; }
 .title h1 { margin: 0; font-size: 17px; letter-spacing: .5px; }
+.title strong { display: block; margin-top: 2px; font-size: 10px; }
+.title span { display: block; margin-top: 2px; }
 .right-head { text-align: right; font-size: 8px; }
 .report-box { border: 1px dotted #111; text-align: center; margin-left: 8px; margin-top: 4px; padding: 4px 2px; }
 .report-box .num { font-size: 14px; font-weight: bold; }
 .report-box .range { border-top: 1px dotted #111; margin-top: 3px; padding-top: 3px; font-weight: bold; }
 .meta-line { border-top: 1px solid #111; border-bottom: 1px solid #111; padding: 4px 0; margin: 4px 0 0; }
-.record-head { margin: 5px 9mm 0 9mm; font-size: 8px; font-weight: bold; border-bottom: 1px solid #111; padding-bottom: 3px; }
-.record-row { margin: 0 9mm; border-bottom: 0.5px solid #999; padding: 4px 0 3px 0; }
-.record-empty { margin: 0 9mm; border-bottom: 0.5px solid #999; padding: 18px 0; text-align: center; }
-.col { display: inline-block; vertical-align: top; }
-.date { width: 12%; }
-.product { width: 29%; }
-.category { width: 14%; }
-.location { width: 17%; }
-.qty { width: 7%; text-align: right; }
-.price { width: 9%; text-align: right; }
-.total { width: 10%; text-align: right; }
+.meta-table { width: 100%; border-collapse: collapse; }
+.meta-table td { border: 0; padding: 1px 2px; }
+.report { width: 100%; border-collapse: collapse; margin-top: 0; }
+.report th { border-bottom: 1px solid #111; padding: 3px 4px; font-size: 8px; text-align: left; }
+.report td { border-bottom: 1px solid #d9d9d9; padding: 4px; vertical-align: top; }
+.report .num { text-align: right; }
+.report .code { width: 11%; }
+.report .product { width: 28%; }
+.report .category { width: 13%; }
+.report .location { width: 16%; }
+.report .qty { width: 7%; }
+.report .price { width: 9%; }
+.report .total { width: 10%; }
+.report .stock { width: 6%; }
 .row-sub { color: #444; font-size: 7px; margin-top: 2px; }
-.totals { margin-top: 7px; border-top: 1px solid #111; }
+.totals { width: 100%; border-collapse: collapse; margin-top: 6px; }
+.totals td { border: 0; padding: 2px 4px; }
 .totals .label { text-align: right; font-size: 9px; }
-.totals .value { text-align: right; font-size: 12px; font-weight: bold; }
+.totals .value { text-align: right; font-size: 12px; font-weight: bold; border-top: 1px solid #111; }
 .filters { margin-top: 5px; font-size: 8px; border-top: 1px dotted #333; padding-top: 4px; }
+.footer-note { margin-top: 8px; border-top: 1px dotted #111; padding-top: 4px; font-size: 8px; color: #333; }
+.empty { padding: 18px; text-align: center; border-bottom: 1px solid #d9d9d9; }
 </style>
 </head>
 <body>
 <div class="page">
-  <table class="header-table"><tr>
-    <td style="width:38%;"><div class="brand">{{ header_context.cliente }}</div><div class="business"><p>{{ header_context.cliente }}</p><p>{{ header_context.tipo_ubicacion }}: {{ header_context.ubicacion }}</p><p>{{ header_context.direccion }}</p><p>Cel.: {{ header_context.celular }}</p></div></td>
-    <td style="width:34%;" class="title"><h1>REPORTE DE INVENTARIO</h1><strong>{{ tipo_movimiento }}</strong><p>( Expresado en Bs. )</p></td>
-    <td style="width:28%;" class="right-head"><p>Generado: {{ generado_en.strftime('%d/%m/%Y %H:%M:%S') }}</p><div class="report-box"><div>Nro. REPORTE</div><div class="num">{{ report_number }}</div><div class="range">{{ fecha_inicio.strftime('%d/%m/%Y') }} - {{ fecha_fin.strftime('%d/%m/%Y') }}</div></div></td>
-  </tr></table>
-  <div class="meta-line"><table class="meta-table"><tr><td style="width:58%;"><strong>Realizado por:</strong> {{ generado_por }}</td><td style="width:42%;"><strong>Periodo:</strong> {{ periodo }}</td></tr><tr><td><strong>Categorias:</strong> {{ filter_names.categorias|join(', ') if filter_names.categorias else 'Todas' }}</td><td><strong>Ubicaciones:</strong> {{ filter_names.ubicaciones|join(', ') if filter_names.ubicaciones else 'Todas' }}</td></tr></table></div>
-  <div class="record-head"><span class="col date">Fecha mov.</span><span class="col product">Producto</span><span class="col category">Categoria</span><span class="col location">Almacen/Ubi</span><span class="col qty">Cant.</span><span class="col price">Precio</span><span class="col total">Total Bs</span></div>
-  {% if rows %}{% for row in rows %}<div class="record-row"><span class="col date">{% if row.fecha_movimiento %}{{ row.fecha_movimiento.strftime('%d/%m/%Y') }}{% else %}-{% endif %}</span><span class="col product">{{ row.producto }}<div class="row-sub">Entradas: {{ row.entradas_periodo|int }} &nbsp; Salidas: {{ row.salidas_periodo|int }} &nbsp; Stock: {{ row.stock_actual|int }}</div></span><span class="col category">{{ row.categoria }}</span><span class="col location">{{ row.ubicacion }}<div class="row-sub">{{ row.tipo_ubicacion }}</div></span><span class="col qty">{{ row.cantidad_reporte|int }}</span><span class="col price">{{ '%.2f'|format(row.precio or 0) }}</span><span class="col total">{{ '%.2f'|format(row.total_bs or 0) }}</span></div>{% endfor %}{% else %}<div class="record-empty">No hay registros para los filtros seleccionados.</div>{% endif %}
-  <table class="totals"><tr><td style="width:55%;"></td><td class="label" style="width:20%;">Total Cantidad</td><td class="label" style="width:25%;">Total Bs</td></tr><tr><td></td><td class="value">{{ totals.cantidad }}</td><td class="value">{{ '%.2f'|format(totals.bs or 0) }}</td></tr></table>
-  <div class="filters"><p><strong>Resumen:</strong> Stock total {{ totals.stock }} - Entradas {{ totals.entradas }} - Salidas {{ totals.salidas }}</p><p>El numero de reporte corresponde al registro interno creado en la base de datos al generar este PDF.</p></div>
+  <table class="header-table">
+    <tr>
+      <td style="width: 38%;">
+        <div class="brand">{{ header_context.cliente }}</div>
+        <div class="business">
+          <p>{{ header_context.cliente }}</p>
+          <p>{{ header_context.tipo_ubicacion }}: {{ header_context.ubicacion }}</p>
+          <p>{{ header_context.direccion }}</p>
+          <p>Cel.: {{ header_context.celular }}</p>
+        </div>
+      </td>
+      <td style="width: 34%;" class="title">
+        <h1>REPORTE DE INVENTARIO</h1>
+        <strong>{{ tipo_movimiento }}</strong>
+        <span>( Expresado en Bs. )</span>
+      </td>
+      <td style="width: 28%;" class="right-head">
+        <p>Generado: {{ generado_en.strftime('%d/%m/%Y %H:%M:%S') }}</p>
+        <div class="report-box">
+          <div>Nº REPORTE</div>
+          <div class="num">{{ report_number }}</div>
+          <div class="range">{{ fecha_inicio.strftime('%d/%m/%Y') }} - {{ fecha_fin.strftime('%d/%m/%Y') }}</div>
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  <div class="meta-line">
+    <table class="meta-table">
+      <tr>
+        <td style="width: 58%;"><strong>Realizado por:</strong> {{ generado_por }}</td>
+        <td style="width: 42%;"><strong>Periodo:</strong> {{ periodo }}</td>
+      </tr>
+      <tr>
+        <td><strong>Categorias:</strong> {{ filter_names.categorias|join(', ') if filter_names.categorias else 'Todas' }}</td>
+        <td><strong>Ubicaciones:</strong> {{ filter_names.ubicaciones|join(', ') if filter_names.ubicaciones else 'Todas' }}</td>
+      </tr>
+    </table>
+  </div>
+
+  <table class="report">
+    <thead>
+      <tr>
+        <th class="code">Cod.</th>
+        <th class="product">Producto</th>
+        <th class="category">Categoria</th>
+        <th class="location">Almacen/Ubi</th>
+        <th class="qty num">Cant.</th>
+        <th class="price num">Precio</th>
+        <th class="total num">Total Bs</th>
+        <th class="stock num">Stock</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if rows %}
+      {% for row in rows %}
+      <tr>
+        <td class="code">{{ row.codigo or '-' }}</td>
+        <td class="product">{{ row.producto }}<div class="row-sub">Entradas: {{ row.entradas_periodo|int }} &nbsp; Salidas: {{ row.salidas_periodo|int }}</div></td>
+        <td class="category">{{ row.categoria }}</td>
+        <td class="location">{{ row.ubicacion }}<div class="row-sub">{{ row.tipo_ubicacion }}</div></td>
+        <td class="qty num">{{ row.cantidad_reporte|int }}</td>
+        <td class="price num">{{ '%.2f'|format(row.precio or 0) }}</td>
+        <td class="total num">{{ '%.2f'|format(row.total_bs or 0) }}</td>
+        <td class="stock num">{{ row.stock_actual|int }}</td>
+      </tr>
+      {% endfor %}
+      {% else %}
+      <tr><td colspan="8" class="empty">No hay registros para los filtros seleccionados.</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+
+  <table class="totals">
+    <tr>
+      <td style="width: 55%;"></td>
+      <td class="label" style="width: 20%;">Total Cantidad</td>
+      <td class="label" style="width: 25%;">Total Bs</td>
+    </tr>
+    <tr>
+      <td></td>
+      <td class="value">{{ totals.cantidad }}</td>
+      <td class="value">{{ '%.2f'|format(totals.bs or 0) }}</td>
+    </tr>
+  </table>
+
+  <div class="filters">
+    <p><strong>Resumen:</strong> Stock total {{ totals.stock }} · Entradas {{ totals.entradas }} · Salidas {{ totals.salidas }}</p>
+    <p>Este documento se genera directamente en PDF y no crea registros de reporte en el sistema.</p>
+  </div>
 </div>
 </body>
 </html>
