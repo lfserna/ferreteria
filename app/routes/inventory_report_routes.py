@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from io import BytesIO
 
 from flask import g, jsonify, make_response, render_template, request
@@ -54,6 +55,10 @@ def _movement_condition(tipo):
     return ""
 
 
+def _money(value):
+    return Decimal(str(value or 0)).quantize(Decimal("0.01"))
+
+
 def _report_rows(cliente_id, start, end, categoria_ids, ubicacion_ids, tipo_movimiento):
     filters = ["p.cliente_id=%s", "p.deleted_at IS NULL"]
     filter_params = [cliente_id]
@@ -70,6 +75,7 @@ def _report_rows(cliente_id, start, end, categoria_ids, ubicacion_ids, tipo_movi
         cursor.execute(
             f"""
             SELECT
+                p.codigo_producto AS codigo,
                 p.nombre AS producto,
                 COALESCE(cat.nombre, '-') AS categoria,
                 COALESCE(u.nombre, '-') AS ubicacion,
@@ -85,8 +91,7 @@ def _report_rows(cliente_id, start, end, categoria_ids, ubicacion_ids, tipo_movi
                     WHEN im.tipo_movimiento IN ('SALIDA','VENTA','TRASPASO') AND im.ubicacion_origen_id = u.id AND DATE(im.created_at) BETWEEN %s AND %s THEN im.cantidad
                     WHEN im.tipo_movimiento = 'AJUSTE_NEGATIVO' AND im.ubicacion_origen_id = u.id AND DATE(im.created_at) BETWEEN %s AND %s THEN im.cantidad
                     ELSE 0
-                END), 0) AS salidas_periodo,
-                MAX(im.created_at) AS ultimo_movimiento
+                END), 0) AS salidas_periodo
             FROM productos p
             LEFT JOIN categorias_producto cat ON cat.id=p.categoria_id
             LEFT JOIN inventarios i ON i.producto_id=p.id AND i.cliente_id=p.cliente_id
@@ -99,13 +104,25 @@ def _report_rows(cliente_id, start, end, categoria_ids, ubicacion_ids, tipo_movi
             )
             LEFT JOIN inventario_movimientos im ON im.cliente_id=p.cliente_id AND im.producto_id=p.id
             WHERE {where}
-            GROUP BY p.id, cat.nombre, u.id, u.nombre, u.tipo_ubicacion, pr.precio_venta_estandar, i.cantidad_disponible
+            GROUP BY p.id, p.codigo_producto, cat.nombre, u.id, u.nombre, u.tipo_ubicacion, pr.precio_venta_estandar, i.cantidad_disponible
             {having}
             ORDER BY u.tipo_ubicacion, u.nombre, cat.nombre, p.nombre
             """,
             tuple(date_params + filter_params),
         )
-        return cursor.fetchall()
+        rows = cursor.fetchall()
+
+    for row in rows:
+        if tipo_movimiento == "ENTRADA":
+            cantidad = int(row.get("entradas_periodo") or 0)
+        elif tipo_movimiento == "SALIDA":
+            cantidad = int(row.get("salidas_periodo") or 0)
+        else:
+            cantidad = int(row.get("stock_actual") or 0)
+        precio = _money(row.get("precio") or 0)
+        row["cantidad_reporte"] = cantidad
+        row["total_bs"] = _money(precio * Decimal(cantidad))
+    return rows
 
 
 def _filter_names(cliente_id, categoria_ids, ubicacion_ids):
@@ -126,6 +143,49 @@ def _filter_names(cliente_id, categoria_ids, ubicacion_ids):
     return result
 
 
+def _report_header_context(cliente_id, ubicacion_ids):
+    with db_cursor() as cursor:
+        cursor.execute("SELECT nombre_comercial, direccion, telefono FROM clientes WHERE id=%s LIMIT 1", (cliente_id,))
+        cliente = cursor.fetchone() or {}
+        context = {
+            "cliente": cliente.get("nombre_comercial") or "Ferreteria",
+            "ubicacion": "Todas las ubicaciones",
+            "tipo_ubicacion": "GENERAL",
+            "direccion": cliente.get("direccion") or "-",
+            "celular": cliente.get("telefono") or "-",
+        }
+        if len(ubicacion_ids) != 1:
+            if len(ubicacion_ids) > 1:
+                context["ubicacion"] = f"{len(ubicacion_ids)} ubicaciones seleccionadas"
+            return context
+        cursor.execute(
+            """
+            SELECT u.nombre AS ubicacion, u.tipo_ubicacion,
+                   s.nombre AS sucursal_nombre, s.direccion AS sucursal_direccion, s.telefono AS sucursal_telefono,
+                   a.nombre AS almacen_nombre, a.direccion AS almacen_direccion
+            FROM ubicaciones_stock u
+            LEFT JOIN sucursales s ON s.id=u.sucursal_id
+            LEFT JOIN almacenes a ON a.id=u.almacen_id
+            WHERE u.cliente_id=%s AND u.id=%s
+            LIMIT 1
+            """,
+            (cliente_id, ubicacion_ids[0]),
+        )
+        location = cursor.fetchone()
+        if not location:
+            return context
+        if location.get("tipo_ubicacion") == "SUCURSAL":
+            context["ubicacion"] = location.get("sucursal_nombre") or location.get("ubicacion") or "Sucursal"
+            context["direccion"] = location.get("sucursal_direccion") or context["direccion"]
+            context["celular"] = location.get("sucursal_telefono") or context["celular"]
+        else:
+            context["ubicacion"] = location.get("almacen_nombre") or location.get("ubicacion") or "Almacen"
+            context["direccion"] = location.get("almacen_direccion") or context["direccion"]
+            context["celular"] = location.get("sucursal_telefono") or context["celular"]
+        context["tipo_ubicacion"] = location.get("tipo_ubicacion") or "GENERAL"
+        return context
+
+
 @login_required
 def inventario_reporte_pdf():
     if g.user["rol_codigo"] != "ADMIN_GENERAL_NEGOCIO":
@@ -141,12 +201,21 @@ def inventario_reporte_pdf():
 
     rows = _report_rows(g.user["cliente_id"], start, end, categoria_ids, ubicacion_ids, tipo_movimiento)
     filter_names = _filter_names(g.user["cliente_id"], categoria_ids, ubicacion_ids)
+    header_context = _report_header_context(g.user["cliente_id"], ubicacion_ids)
+    total_cantidad = sum(int(row.get("cantidad_reporte") or 0) for row in rows)
+    total_bs = sum((_money(row.get("total_bs") or 0) for row in rows), Decimal("0.00"))
     totals = {
+        "cantidad": total_cantidad,
+        "bs": _money(total_bs),
         "stock": sum(int(row.get("stock_actual") or 0) for row in rows),
         "entradas": sum(int(row.get("entradas_periodo") or 0) for row in rows),
         "salidas": sum(int(row.get("salidas_periodo") or 0) for row in rows),
     }
-    totals["neto"] = totals["entradas"] - totals["salidas"]
+    generated_at = datetime.now()
+    generated_by = " ".join(
+        part for part in [g.user.get("nombres"), g.user.get("apellido_paterno"), g.user.get("apellido_materno")] if part
+    ) or g.user.get("username") or "usuario"
+    report_number = f"REP-{generated_at.strftime('%Y%m%d-%H%M%S')}"
 
     html = render_template(
         "inventory/report_pdf.html",
@@ -157,9 +226,10 @@ def inventario_reporte_pdf():
         periodo=period_label,
         tipo_movimiento=tipo_movimiento,
         filter_names=filter_names,
-        cliente=g.user.get("cliente_nombre") or "Ferreteria",
-        generado_por=g.user.get("username") or "usuario",
-        generado_en=datetime.now(),
+        header_context=header_context,
+        generado_por=generated_by,
+        generado_en=generated_at,
+        report_number=report_number,
     )
     pdf_buffer = BytesIO()
     status = pisa.CreatePDF(html, dest=pdf_buffer, encoding="UTF-8")
