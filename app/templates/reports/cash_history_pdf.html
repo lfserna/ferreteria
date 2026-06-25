@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <style>
 @page { size: A4 portrait; margin: 9mm; }
-body { font-family: DejaVu Sans, Arial, sans-serif; font-size: 7.5px; color: #111; }
+body { font-family: DejaVu Sans, Arial, sans-serif; font-size: 7.1px; color: #111; }
 p { margin: 1px 0; }
 .page { border: 1px solid #111; min-height: 270mm; padding: 7px; }
 .header-table { width: 100%; border-collapse: collapse; margin-bottom: 5px; }
@@ -23,17 +23,19 @@ p { margin: 1px 0; }
 .meta-table { width: 100%; border-collapse: collapse; }
 .meta-table td { border: 0; padding: 1px 2px; }
 .report { width: 100%; border-collapse: collapse; margin-top: 4px; table-layout: fixed; }
-.report th { border-bottom: 1px solid #111; padding: 2px 2px; font-size: 6.4px; text-align: left; }
+.report th { border-bottom: 1px solid #111; padding: 2px 2px; font-size: 5.9px; text-align: left; }
 .report td { border-bottom: 1px solid #d9d9d9; padding: 2px; vertical-align: top; }
 .report .num { text-align: right; }
 .report .box { width: 5%; }
-.report .store { width: 10%; }
-.report .cashier { width: 12%; }
-.report .date { width: 10%; }
-.report .money { width: 8%; }
-.report .diff { width: 8%; }
-.report .total { width: 10%; }
-.row-sub { color: #444; font-size: 6px; margin-top: 1px; }
+.report .store { width: 9%; }
+.report .cashier { width: 11%; }
+.report .date { width: 9%; }
+.report .mode { width: 10%; }
+.report .money { width: 7.5%; }
+.report .diff { width: 7.5%; }
+.report .total { width: 9%; }
+.row-sub { color: #444; font-size: 5.5px; margin-top: 1px; }
+.auto-note { color: #111; font-weight: bold; }
 .totals { width: 100%; border-collapse: collapse; margin-top: 6px; }
 .totals td { border: 0; padding: 2px 4px; }
 .totals .label { text-align: right; font-size: 8px; }
@@ -91,6 +93,7 @@ p { margin: 1px 0; }
         <th class="cashier">Cajero</th>
         <th class="date">Abierto</th>
         <th class="date">Cerrado</th>
+        <th class="mode">Cierre</th>
         <th class="money num">Apert. Ef.</th>
         <th class="money num">Apert. QR</th>
         <th class="money num">Cierre Ef.</th>
@@ -108,16 +111,17 @@ p { margin: 1px 0; }
         <td class="cashier">{{ row.cajero or '-' }}<div class="row-sub">ID {{ row.cajero_id or '-' }}</div></td>
         <td class="date">{% if row.abierto %}{{ row.abierto.strftime('%d/%m/%y %H:%M') }}{% else %}-{% endif %}</td>
         <td class="date">{% if row.cerrado %}{{ row.cerrado.strftime('%d/%m/%y %H:%M') }}{% else %}Abierta{% endif %}</td>
+        <td class="mode">{% if row.cierre_automatico %}<span class="auto-note">Automático</span><div class="row-sub">{{ row.observacion_cierre or 'Sin comprobación de saldos' }}</div>{% else %}Manual{% endif %}</td>
         <td class="money num">{{ '%.2f'|format(row.apertura_efectivo or 0) }}</td>
         <td class="money num">{{ '%.2f'|format(row.apertura_qr or 0) }}</td>
-        <td class="money num">{{ '%.2f'|format(row.cierre_efectivo or 0) }}</td>
-        <td class="money num">{{ '%.2f'|format(row.cierre_qr or 0) }}</td>
-        <td class="diff num">{{ '%.2f'|format(row.diferencia or 0) }}</td>
+        <td class="money num">{% if row.cierre_automatico %}Sin comprob.{% else %}{{ '%.2f'|format(row.cierre_efectivo or 0) }}{% endif %}</td>
+        <td class="money num">{% if row.cierre_automatico %}Sin comprob.{% else %}{{ '%.2f'|format(row.cierre_qr or 0) }}{% endif %}</td>
+        <td class="diff num">{% if row.cierre_automatico %}-{% else %}{{ '%.2f'|format(row.diferencia or 0) }}{% endif %}</td>
         <td class="total num">{{ '%.2f'|format(row.total_recaudado or 0) }}</td>
       </tr>
       {% endfor %}
       {% else %}
-      <tr><td colspan="11" class="empty">No hay cajas para los filtros seleccionados.</td></tr>
+      <tr><td colspan="12" class="empty">No hay cajas para los filtros seleccionados.</td></tr>
       {% endif %}
     </tbody>
   </table>
