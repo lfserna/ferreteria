@@ -28,6 +28,12 @@ def current_stock_location():
     return get_primary_stock_location(g.user["cliente_id"], g.user.get("sucursal_id"), g.user.get("almacen_id"))
 
 
+def current_seller_name():
+    parts = [g.user.get("nombres"), g.user.get("apellido_paterno")]
+    name = " ".join([part for part in parts if part])
+    return name or g.user.get("username") or "-"
+
+
 @sales_bp.route("")
 @login_required
 def index():
@@ -38,8 +44,18 @@ def index():
     can_send_order = g.user["rol_codigo"] in {"VENDEDOR", "ADMIN_TIENDA"}
     pending_orders = list_pending_orders(g.user["cliente_id"], g.user.get("sucursal_id")) if can_confirm else []
     caja = cash_summary(g.user["cliente_id"], g.user["id"], ubicacion_stock_id) if can_confirm else None
-    return render_template("sales/index.html", can_confirm=can_confirm, can_send_order=can_send_order, pending_orders=pending_orders,
-                           caja=caja, caja_abierta=bool(caja), requiere_caja=can_confirm, ubicacion_stock_id=ubicacion_stock_id)
+    return render_template(
+        "sales/index.html",
+        can_confirm=can_confirm,
+        can_send_order=can_send_order,
+        pending_orders=pending_orders,
+        caja=caja,
+        caja_abierta=bool(caja),
+        requiere_caja=can_confirm,
+        ubicacion_stock_id=ubicacion_stock_id,
+        seller_id=g.user["id"],
+        seller_name=current_seller_name(),
+    )
 
 
 @sales_bp.route("/caja/abrir", methods=["POST"])
@@ -137,7 +153,7 @@ def confirmar():
     try:
         require_open_cash(g.user["cliente_id"], g.user["id"], ubicacion_stock_id)
         result = confirm_sale_from_cart(cliente_id=g.user["cliente_id"], sucursal_id=g.user.get("sucursal_id"), ubicacion_stock_id=ubicacion_stock_id,
-                                        cajero_id=g.user["id"], vendedor_id=None, created_by=g.user["id"], items=payload.get("items", []),
+                                        cajero_id=g.user["id"], vendedor_id=g.user["id"], created_by=g.user["id"], items=payload.get("items", []),
                                         metodo_pago=payload.get("metodo_pago"), idempotency_key=payload.get("idempotency_key"), orden_id=payload.get("orden_id"))
         return jsonify(to_jsonable(result)), 201
     except ValueError as exc:
@@ -170,5 +186,5 @@ def comprobante_pdf(venta_id):
         return "No se pudo generar el PDF del comprobante.", 500
     response = make_response(pdf_buffer.getvalue())
     response.headers["Content-Type"] = "application/pdf"
-    response.headers["Content-Disposition"] = f"inline; filename=comprobante-{venta_id}.pdf"
+    response.headers["Content-Disposition"] = f"inline; filename=comprobante-{receipt.get('numero_comprobante') or venta_id}.pdf"
     return response
