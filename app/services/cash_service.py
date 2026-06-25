@@ -1,7 +1,11 @@
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from app.database import db_cursor, db_transaction
 from app.services.audit_service import log_audit
+
+AUTO_CLOSE_NOTE = "Cierre automático sin comprobación de saldos."
+_AUTO_CLOSE_RUNNING = False
 
 
 def money(value):
@@ -27,6 +31,7 @@ def ensure_cash_tables():
                 monto_final_qr DECIMAL(12,2) NULL,
                 diferencia_efectivo DECIMAL(12,2) NULL,
                 diferencia_qr DECIMAL(12,2) NULL,
+                cierre_automatico TINYINT(1) NOT NULL DEFAULT 0,
                 abierta_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 cerrada_at DATETIME NULL,
                 observacion_apertura TEXT NULL,
@@ -40,6 +45,8 @@ def ensure_cash_tables():
         )
         migrate_cash_session_table(cursor)
         ensure_sales_cash_session_column(cursor)
+    if not _AUTO_CLOSE_RUNNING:
+        auto_close_expired_cash_sessions(skip_ensure=True)
 
 
 def table_exists(cursor, table_name):
@@ -140,6 +147,7 @@ def migrate_cash_session_table(cursor):
     add_column_if_missing(cursor, columns, "monto_final_qr", "DECIMAL(12,2) NULL")
     add_column_if_missing(cursor, columns, "diferencia_efectivo", "DECIMAL(12,2) NULL")
     add_column_if_missing(cursor, columns, "diferencia_qr", "DECIMAL(12,2) NULL")
+    add_column_if_missing(cursor, columns, "cierre_automatico", "TINYINT(1) NOT NULL DEFAULT 0")
     add_column_if_missing(cursor, columns, "abierta_at", "DATETIME NULL")
     add_column_if_missing(cursor, columns, "cerrada_at", "DATETIME NULL")
     add_column_if_missing(cursor, columns, "observacion_apertura", "TEXT NULL")
@@ -283,6 +291,20 @@ def _session_columns(cursor):
     return set(column_info(cursor, "caja_sesiones").keys())
 
 
+def _coalesce_expr(cols, candidates, fallback="NULL"):
+    existing = [col for col in candidates if col in cols]
+    if not existing:
+        return fallback
+    return f"COALESCE({', '.join(existing)})" if len(existing) > 1 else existing[0]
+
+
+def _session_user_expr(cols):
+    users = [col for col in ["usuario_id", "usuario_apertura_id"] if col in cols]
+    if not users:
+        return "NULL"
+    return f"COALESCE({', '.join(users)})" if len(users) > 1 else users[0]
+
+
 def _user_open_filter(cols):
     parts = []
     if "usuario_id" in cols:
@@ -290,6 +312,130 @@ def _user_open_filter(cols):
     if "usuario_apertura_id" in cols:
         parts.append("usuario_apertura_id=%s")
     return "(" + " OR ".join(parts or ["1=0"]) + ")"
+
+
+def _is_nullable(cols_info, name):
+    info = cols_info.get(name) or {}
+    return str(info.get("Null", "YES")).upper() == "YES"
+
+
+def _value_or_expected_for_not_null(cols_info, name, expected):
+    if name not in cols_info:
+        return None
+    return None if _is_nullable(cols_info, name) else expected
+
+
+def _auto_close_at(opened_at):
+    if isinstance(opened_at, str):
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                opened_at = datetime.strptime(opened_at, fmt)
+                break
+            except ValueError:
+                continue
+    if not hasattr(opened_at, "date"):
+        return datetime.now()
+    return datetime.combine(opened_at.date() + timedelta(days=1), datetime.min.time())
+
+
+def auto_close_expired_cash_sessions(cliente_id=None, skip_ensure=False):
+    global _AUTO_CLOSE_RUNNING
+    if _AUTO_CLOSE_RUNNING:
+        return 0
+    if not skip_ensure:
+        ensure_cash_tables()
+    _AUTO_CLOSE_RUNNING = True
+    closed_count = 0
+    try:
+        with db_transaction() as (cursor, _connection):
+            cols_info = column_info(cursor, "caja_sesiones")
+            cols = set(cols_info.keys())
+            opened_expr = _coalesce_expr(cols, ["abierta_at", "fecha_apertura", "created_at"], "created_at")
+            user_expr = _session_user_expr(cols)
+            filters = ["estado='ABIERTA'", f"DATE({opened_expr}) < CURDATE()"]
+            params = []
+            if cliente_id:
+                filters.insert(0, "cliente_id=%s")
+                params.append(cliente_id)
+            cursor.execute(
+                f"""
+                SELECT *, {opened_expr} AS auto_opened_at, {user_expr} AS auto_usuario_id
+                FROM caja_sesiones
+                WHERE {' AND '.join(filters)}
+                ORDER BY {opened_expr} ASC, id ASC
+                FOR UPDATE
+                """,
+                tuple(params),
+            )
+            sessions = cursor.fetchall()
+            for session in sessions:
+                usuario_id = session.get("auto_usuario_id") or session.get("usuario_id") or session.get("usuario_apertura_id")
+                if not usuario_id:
+                    continue
+                opened_at = session.get("auto_opened_at") or session.get("abierta_at") or session.get("fecha_apertura") or session.get("created_at")
+                closed_at = _auto_close_at(opened_at)
+                sales = select_cash_sales_totals(
+                    cursor,
+                    session["cliente_id"],
+                    usuario_id,
+                    session.get("ubicacion_stock_id"),
+                    opened_at,
+                    session_id=session["id"],
+                    closed_at=closed_at,
+                    attach=True,
+                )
+                expected_cash = money(session.get("monto_inicial_efectivo") or session.get("monto_inicial")) + sales["ventas_efectivo"]
+                expected_qr = money(session.get("monto_inicial_qr")) + sales["ventas_qr"]
+                expected_total = expected_cash + expected_qr
+                updates = {
+                    "estado": "CERRADA",
+                    "usuario_cierre_id": usuario_id,
+                    "fecha_cierre": closed_at,
+                    "cerrada_at": closed_at,
+                    "monto_esperado_efectivo": expected_cash,
+                    "monto_esperado_qr": expected_qr,
+                    "monto_final_efectivo": _value_or_expected_for_not_null(cols_info, "monto_final_efectivo", expected_cash),
+                    "monto_final_qr": _value_or_expected_for_not_null(cols_info, "monto_final_qr", expected_qr),
+                    "diferencia_efectivo": _value_or_expected_for_not_null(cols_info, "diferencia_efectivo", Decimal("0.00")),
+                    "diferencia_qr": _value_or_expected_for_not_null(cols_info, "diferencia_qr", Decimal("0.00")),
+                    "monto_final_sistema": expected_total,
+                    "monto_final_contado": _value_or_expected_for_not_null(cols_info, "monto_final_contado", expected_total),
+                    "diferencia": _value_or_expected_for_not_null(cols_info, "diferencia", Decimal("0.00")),
+                    "cierre_automatico": 1,
+                    "observacion_cierre": AUTO_CLOSE_NOTE,
+                    "observacion": AUTO_CLOSE_NOTE,
+                    "updated_at": "NOW()",
+                }
+                raw = {"updated_at"}
+                set_parts = []
+                update_params = []
+                for col, value in updates.items():
+                    if col not in cols:
+                        continue
+                    if col in raw:
+                        set_parts.append(f"{col}={value}")
+                    else:
+                        set_parts.append(f"{col}=%s")
+                        update_params.append(value)
+                if not set_parts:
+                    continue
+                update_params.append(session["id"])
+                cursor.execute(f"UPDATE caja_sesiones SET {', '.join(set_parts)} WHERE id=%s", tuple(update_params))
+                log_audit(
+                    cursor,
+                    cliente_id=session["cliente_id"],
+                    usuario_id=usuario_id,
+                    modulo="CAJA",
+                    accion="CERRAR_CAJA_AUTOMATICO",
+                    tabla_afectada="caja_sesiones",
+                    registro_id=session["id"],
+                    valor_anterior=session,
+                    valor_nuevo={"observacion": AUTO_CLOSE_NOTE, "esperado_efectivo": str(expected_cash), "esperado_qr": str(expected_qr)},
+                )
+                closed_count += 1
+    finally:
+        _AUTO_CLOSE_RUNNING = False
+    return closed_count
 
 
 def get_open_cash_session(cliente_id, usuario_id, ubicacion_stock_id=None):
@@ -303,12 +449,13 @@ def get_open_cash_session(cliente_id, usuario_id, ubicacion_stock_id=None):
         if ubicacion_stock_id and "ubicacion_stock_id" in cols:
             location_filter = " AND (ubicacion_stock_id=%s OR ubicacion_stock_id IS NULL)"
             params.append(ubicacion_stock_id)
+        opened_expr = _coalesce_expr(cols, ["abierta_at", "fecha_apertura", "created_at"], "id")
         cursor.execute(
             f"""
             SELECT *
             FROM caja_sesiones
             WHERE cliente_id=%s AND {user_filter} AND estado='ABIERTA' {location_filter}
-            ORDER BY COALESCE(abierta_at, fecha_apertura, created_at) DESC, id DESC
+            ORDER BY {opened_expr} DESC, id DESC
             LIMIT 1
             """,
             tuple(params),
@@ -348,6 +495,7 @@ def open_cash_session(cliente_id, usuario_id, ubicacion_stock_id, monto_inicial_
             "monto_inicial_efectivo": monto_efectivo,
             "monto_inicial_qr": monto_qr,
             "monto_final_sistema": 0,
+            "cierre_automatico": 0,
             "abierta_at": "NOW()",
             "observacion": observacion,
             "observacion_apertura": observacion,
@@ -409,6 +557,9 @@ def select_cash_sales_totals(cursor, cliente_id, usuario_id, ubicacion_stock_id,
     if session_id and "caja_sesion_id" in cols:
         session_filter = " AND v.caja_sesion_id=%s"
         params.append(session_id)
+        if closed_at:
+            session_filter += " AND v.fecha_venta <= %s"
+            params.append(closed_at)
     else:
         session_filter = " AND v.cajero_id=%s AND v.fecha_venta >= %s AND (%s IS NULL OR v.ubicacion_stock_id=%s)"
         params.extend([usuario_id, opened_at, ubicacion_stock_id, ubicacion_stock_id])
@@ -467,8 +618,9 @@ def close_cash_session(cliente_id, usuario_id, ubicacion_stock_id, monto_final_e
         user_filter = _user_open_filter(cols)
         params = [cliente_id]
         params.extend([usuario_id] * user_filter.count("%s"))
+        opened_expr = _coalesce_expr(cols, ["abierta_at", "fecha_apertura", "created_at"], "id")
         cursor.execute(
-            f"SELECT * FROM caja_sesiones WHERE cliente_id=%s AND {user_filter} AND estado='ABIERTA' ORDER BY COALESCE(abierta_at, fecha_apertura, created_at) DESC, id DESC LIMIT 1 FOR UPDATE",
+            f"SELECT * FROM caja_sesiones WHERE cliente_id=%s AND {user_filter} AND estado='ABIERTA' ORDER BY {opened_expr} DESC, id DESC LIMIT 1 FOR UPDATE",
             tuple(params),
         )
         session = cursor.fetchone()
@@ -496,6 +648,7 @@ def close_cash_session(cliente_id, usuario_id, ubicacion_stock_id, monto_final_e
             "monto_final_sistema": expected_total,
             "monto_final_contado": final_total,
             "diferencia": diff_total,
+            "cierre_automatico": 0,
             "cerrada_at": "NOW()",
             "observacion_cierre": observacion,
             "observacion": observacion,
