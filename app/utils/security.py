@@ -1,6 +1,6 @@
 from functools import wraps
 
-from flask import flash, redirect, session, url_for
+from flask import flash, redirect, request, session, url_for
 from werkzeug.security import check_password_hash
 
 try:
@@ -33,5 +33,8 @@ def login_required(view):
         if not session.get("user_id"):
             flash("Inicia sesión para continuar.", "warning")
             return redirect(url_for("auth.login"))
+        if session.get("force_key_change") and request.endpoint not in {"auth.cambiar_clave", "auth.logout", "static"}:
+            flash("Debes cambiar tu contraseña antes de usar el sistema.", "warning")
+            return redirect(url_for("auth.cambiar_clave"))
         return view(*args, **kwargs)
     return wrapped_view
