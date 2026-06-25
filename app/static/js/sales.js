@@ -234,8 +234,10 @@ async function confirmSale() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'No se pudo confirmar la venta.');
     const comprobante = data.numero_comprobante ? `Comprobante ${String(data.numero_comprobante).padStart(6, '0')}` : data.numero_venta;
+    const receiptUrl = `/ventas/${data.venta_id}/comprobante`;
+    window.open(receiptUrl, '_blank', 'noopener');
     $('#saleResult').hidden = false;
-    $('#saleResult').innerHTML = `Venta confirmada: <span>${comprobante}</span> por ${saleMoney(data.total)}.<br><a href="/ventas/${data.venta_id}/comprobante" target="_blank">Imprimir comprobante</a> · <a href="/ventas/${data.venta_id}/comprobante-pdf" target="_blank">Abrir PDF</a>`;
+    $('#saleResult').innerHTML = `Venta confirmada: <span>${comprobante}</span> por ${saleMoney(data.total)}.<br><a href="${receiptUrl}" target="_blank">Ver comprobante</a> · <a href="/ventas/${data.venta_id}/comprobante-pdf" target="_blank">Abrir PDF</a>`;
     button.textContent = 'Venta confirmada';
     button.disabled = true;
     saleState.cart = [];
