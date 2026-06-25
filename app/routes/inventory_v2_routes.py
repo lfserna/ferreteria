@@ -250,14 +250,24 @@ def crear_producto():
         flash(message, "danger")
         return redirect(url_for("inventory.index"))
     try:
-        result = create_product(g.user["cliente_id"], g.user["id"], request.form)
-        skipped = result.get("codes_skipped") if isinstance(result, dict) else 0
-        if wants_json():
-            return jsonify({"ok": True, "message": "Producto creado correctamente.", "product_id": result.get("product_id") if isinstance(result, dict) else result, "codes_skipped": skipped})
-        message = "Producto creado correctamente."
+        cantidad = qty(request.form.get("cantidad_inicial"))
+        ubicacion_id = int(request.form.get("ubicacion_stock_id") or 0)
+        allowed_managed(ubicacion_id)
+        data = request.form.copy()
+        data["cantidad_inicial"] = str(cantidad)
+        result = create_product(g.user["cliente_id"], g.user["id"], data)
+        product_id = result["product_id"] if isinstance(result, dict) else result
+        skipped = result.get("codes_skipped", []) if isinstance(result, dict) else []
+        registered = result.get("codes_registered", 0) if isinstance(result, dict) else 0
+        message = "Producto agregado correctamente al inventario."
         if skipped:
-            message += f" Se omitieron {skipped} códigos individuales ya existentes."
-        flash(message, "success")
+            shown = ", ".join(skipped[:5])
+            message += f" Códigos registrados: {registered}. Códigos omitidos porque ya existían: {shown}"
+            if len(skipped) > 5:
+                message += f" y {len(skipped) - 5} más."
+        if wants_json():
+            return jsonify({"ok": True, "message": message, "product_id": product_id, "codes_skipped": skipped, "codes_registered": registered})
+        flash(message, "warning" if skipped else "success")
     except IntegrityError as e:
         message = duplicated_integrity_message(e)
         if wants_json():
@@ -266,5 +276,192 @@ def crear_producto():
     except ValueError as e:
         if wants_json():
             return jsonify({"ok": False, "message": str(e)}), 400
+        flash(str(e), "danger")
+    return redirect(url_for("inventory.index"))
+
+
+@inventory_bp.route("/codigos/diagnostico", methods=["POST"])
+@login_required
+def diagnostico_codigos():
+    if not can_manage_products():
+        return jsonify({"ok": False, "message": "Sin permisos."}), 403
+    try:
+        raw = request.form.get("codigos_individuales") or (request.json or {}).get("codigos_individuales") or ""
+        codes = parse_codes(raw)
+        rows = []
+        with db_cursor() as c:
+            for code in codes:
+                aliases = sorted(barcode_aliases(code))
+                placeholders = ",".join(["%s"] * len(aliases))
+                c.execute(
+                    f"""
+                    SELECT pc.codigo, pc.producto_id, p.nombre AS producto
+                    FROM producto_codigos pc
+                    LEFT JOIN productos p ON p.id=pc.producto_id
+                    WHERE pc.cliente_id=%s AND pc.codigo IN ({placeholders})
+                    LIMIT 1
+                    """,
+                    tuple([g.user["cliente_id"]] + aliases),
+                )
+                found = c.fetchone()
+                rows.append({"codigo": code, "aliases": aliases, "existe": bool(found), "existente": found})
+        return jsonify({"ok": True, "codes": rows})
+    except ValueError as e:
+        return jsonify({"ok": False, "message": str(e)}), 400
+
+
+@inventory_bp.route("/api/productos/<int:product_id>")
+@login_required
+def detalle_producto(product_id):
+    with db_cursor() as c:
+        c.execute("""
+            SELECT p.id,p.nombre,p.descripcion,p.codigo_producto,p.codigo_barras,cat.nombre AS categoria
+            FROM productos p LEFT JOIN categorias_producto cat ON cat.id=p.categoria_id
+            WHERE p.cliente_id=%s AND p.id=%s LIMIT 1
+        """, (g.user["cliente_id"], product_id))
+        product = c.fetchone()
+        if not product:
+            return jsonify({"error": "Producto no encontrado"}), 404
+        c.execute("""
+            SELECT pp.id AS presentacion_id, pp.nombre AS presentacion, pp.tipo_presentacion,
+                   COALESCE(pr.precio_venta_estandar,0) AS precio,
+                   COALESCE(pr.precio_minimo_venta,0) AS minimo
+            FROM producto_presentaciones pp
+            LEFT JOIN producto_precios pr ON pr.id=(
+                SELECT pr2.id FROM producto_precios pr2
+                WHERE pr2.producto_presentacion_id=pp.id
+                ORDER BY pr2.id DESC LIMIT 1
+            )
+            WHERE pp.cliente_id=%s AND pp.producto_id=%s
+            ORDER BY CASE WHEN pp.tipo_presentacion='UNIDAD' THEN 0 ELSE 1 END, pp.factor_unidad_base
+        """, (g.user["cliente_id"], product_id))
+        product["presentaciones"] = c.fetchall()
+        c.execute("""
+            SELECT u.nombre AS ubicacion, u.tipo_ubicacion, COALESCE(i.cantidad_disponible,0) AS stock
+            FROM ubicaciones_stock u
+            LEFT JOIN inventarios i ON i.ubicacion_stock_id=u.id AND i.producto_id=%s AND i.cliente_id=u.cliente_id
+            WHERE u.cliente_id=%s
+            ORDER BY u.tipo_ubicacion,u.nombre
+        """, (product_id, g.user["cliente_id"]))
+        product["stock_ubicaciones"] = c.fetchall()
+        return jsonify(to_jsonable(product))
+
+
+@inventory_bp.route("/presentacion-precio", methods=["POST"])
+@login_required
+def presentacion_precio():
+    if not can_manage_products():
+        flash("No tienes permisos para editar presentación ni precios.", "danger")
+        return redirect(url_for("inventory.index"))
+    try:
+        product_id = int(request.form.get("producto_id") or 0)
+        presentacion = (request.form.get("presentacion") or "Unidad").strip() or "Unidad"
+        precio = float(request.form.get("precio_venta_estandar") or 0)
+        minimo = float(request.form.get("precio_minimo_venta") or 0)
+        if precio <= 0:
+            raise ValueError("El precio debe ser mayor a cero.")
+        if minimo < 0 or minimo > precio:
+            raise ValueError("El precio mínimo debe ser mayor o igual a cero y no puede superar el precio.")
+        with db_transaction() as (c, _):
+            presentacion_activa = estado_value(c, "producto_presentaciones", "ACTIVO")
+            precio_activo = estado_value(c, "producto_precios", "ACTIVO")
+            precio_inactivo = estado_value(c, "producto_precios", "INACTIVO")
+            c.execute("SELECT id,nombre FROM productos WHERE cliente_id=%s AND id=%s FOR UPDATE", (g.user["cliente_id"], product_id))
+            product = c.fetchone()
+            if not product:
+                raise ValueError("Producto no encontrado.")
+            c.execute("SELECT * FROM producto_presentaciones WHERE cliente_id=%s AND producto_id=%s AND tipo_presentacion='UNIDAD' LIMIT 1", (g.user["cliente_id"], product_id))
+            previous_presentation = c.fetchone()
+            if previous_presentation:
+                presentation_id = previous_presentation["id"]
+                c.execute("UPDATE producto_presentaciones SET nombre=%s,factor_unidad_base=1,estado=%s,updated_at=NOW() WHERE id=%s", (presentacion, presentacion_activa, presentation_id))
+            else:
+                c.execute("INSERT INTO producto_presentaciones (cliente_id,producto_id,tipo_presentacion,nombre,factor_unidad_base,estado,created_at,updated_at) VALUES (%s,%s,'UNIDAD',%s,1,%s,NOW(),NOW())", (g.user["cliente_id"], product_id, presentacion, presentacion_activa))
+                presentation_id = c.lastrowid
+            c.execute("UPDATE producto_precios SET estado=%s,updated_at=NOW() WHERE cliente_id=%s AND producto_presentacion_id=%s", (precio_inactivo, g.user["cliente_id"], presentation_id))
+            c.execute("INSERT INTO producto_precios (cliente_id,producto_id,producto_presentacion_id,precio_venta_estandar,precio_minimo_venta,moneda,vigente_desde,estado,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,'BOB',NOW(),%s,NOW(),NOW())", (g.user["cliente_id"], product_id, presentation_id, precio, minimo, precio_activo))
+            log_audit(c, cliente_id=g.user["cliente_id"], usuario_id=g.user["id"], modulo="CATALOGO", accion="EDITAR_PRESENTACION_PRECIO", tabla_afectada="producto_precios", registro_id=presentation_id, valor_anterior=previous_presentation, valor_nuevo={"producto_id": product_id, "presentacion": presentacion, "precio": precio, "minimo": minimo})
+        flash("Presentación y precio actualizados correctamente.", "success")
+    except ValueError as e:
+        flash(str(e), "danger")
+    return redirect(url_for("inventory.index"))
+
+
+@inventory_bp.route("/ajustar", methods=["POST"])
+@login_required
+def ajustar():
+    if not can_manage_inventory():
+        flash("No tienes permisos para ajustar inventario.", "danger")
+        return redirect(url_for("inventory.index"))
+    try:
+        product_id = int(request.form.get("producto_id") or 0)
+        location_id = int(request.form.get("ubicacion_stock_id") or 0)
+        amount = qty(request.form.get("cantidad_disponible"))
+        minimum = int(request.form.get("cantidad_minima") or 0)
+        allowed_managed(location_id)
+        with db_transaction() as (c, _):
+            iid = inv_id(c, product_id, location_id)
+            c.execute("SELECT * FROM inventarios WHERE id=%s FOR UPDATE", (iid,))
+            old = c.fetchone()
+            diff = amount - int(old["cantidad_disponible"])
+            c.execute("UPDATE inventarios SET cantidad_disponible=%s,cantidad_minima=%s,updated_at=NOW() WHERE id=%s", (amount, minimum, iid))
+            kind = "AJUSTE_POSITIVO" if diff >= 0 else "AJUSTE_NEGATIVO"
+            c.execute("INSERT INTO inventario_movimientos (cliente_id,producto_id,ubicacion_origen_id,tipo_movimiento,cantidad,referencia_tipo,referencia_id,usuario_id,observacion,created_at) VALUES (%s,%s,%s,%s,%s,'INVENTARIO',%s,%s,%s,NOW())", (g.user["cliente_id"], product_id, location_id, kind, abs(diff), iid, g.user["id"], request.form.get("observacion") or "Ajuste manual"))
+            log_audit(c, cliente_id=g.user["cliente_id"], usuario_id=g.user["id"], modulo="INVENTARIO", accion="AJUSTAR_STOCK", tabla_afectada="inventarios", registro_id=iid, valor_anterior=old, valor_nuevo={"cantidad_disponible": amount, "cantidad_minima": minimum})
+        flash("Inventario ajustado correctamente.", "success")
+    except ValueError as e:
+        flash(str(e), "danger")
+    return redirect(url_for("inventory.index"))
+
+
+@inventory_bp.route("/movimiento", methods=["POST"])
+@login_required
+def movimiento():
+    if not can_manage_inventory():
+        flash("No tienes permisos para crear movimientos.", "danger")
+        return redirect(url_for("inventory.index"))
+    try:
+        product_id = int(request.form.get("producto_id") or 0)
+        kind = request.form.get("tipo_movimiento") or "ENTRADA"
+        amount = qty(request.form.get("cantidad"))
+        origin = int(request.form.get("ubicacion_origen_id") or 0) or None
+        target = int(request.form.get("ubicacion_destino_id") or 0) or None
+        if kind == "ENTRADA":
+            if not target:
+                raise ValueError("Selecciona la ubicación de destino.")
+            allowed_managed(target)
+            origin = None
+        elif kind == "SALIDA":
+            if not origin:
+                raise ValueError("Selecciona la ubicación de origen.")
+            allowed_managed(origin)
+            target = None
+        elif kind == "TRASPASO":
+            if not origin or not target:
+                raise ValueError("Selecciona origen y destino.")
+            allowed_managed(origin)
+            allowed_client(target)
+            if origin == target:
+                raise ValueError("Origen y destino no pueden ser iguales.")
+        else:
+            raise ValueError("Tipo de movimiento inválido.")
+        with db_transaction() as (c, _):
+            if origin:
+                iid = inv_id(c, product_id, origin)
+                c.execute("SELECT cantidad_disponible FROM inventarios WHERE id=%s FOR UPDATE", (iid,))
+                row = c.fetchone()
+                if int(row["cantidad_disponible"]) < amount:
+                    raise ValueError("Stock insuficiente en origen.")
+                c.execute("UPDATE inventarios SET cantidad_disponible=cantidad_disponible-%s,updated_at=NOW() WHERE id=%s", (amount, iid))
+            if target:
+                iid = inv_id(c, product_id, target)
+                c.execute("SELECT id FROM inventarios WHERE id=%s FOR UPDATE", (iid,))
+                c.fetchone()
+                c.execute("UPDATE inventarios SET cantidad_disponible=cantidad_disponible+%s,updated_at=NOW() WHERE id=%s", (amount, iid))
+            c.execute("INSERT INTO inventario_movimientos (cliente_id,producto_id,ubicacion_origen_id,ubicacion_destino_id,tipo_movimiento,cantidad,referencia_tipo,usuario_id,observacion,created_at) VALUES (%s,%s,%s,%s,%s,%s,'MANUAL',%s,%s,NOW())", (g.user["cliente_id"], product_id, origin, target, kind, amount, g.user["id"], request.form.get("observacion") or None))
+            mid = c.lastrowid
+            log_audit(c, cliente_id=g.user["cliente_id"], usuario_id=g.user["id"], modulo="INVENTARIO", accion=f"MOVIMIENTO_{kind}", tabla_afectada="inventario_movimientos", registro_id=mid, valor_nuevo={"producto_id": product_id, "cantidad": amount, "origen_id": origin, "destino_id": target})
+        flash("Movimiento registrado correctamente.", "success")
+    except ValueError as e:
         flash(str(e), "danger")
     return redirect(url_for("inventory.index"))
