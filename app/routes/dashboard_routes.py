@@ -58,8 +58,7 @@ def sales_scope_clause(alias="v"):
 
 
 def product_scope_clause(alias="p"):
-    params = [g.user["cliente_id"]]
-    return f"{alias}.cliente_id = %s", params
+    return f"{alias}.cliente_id = %s", [g.user["cliente_id"]]
 
 
 def stock_scope_clause(alias="i"):
@@ -247,6 +246,45 @@ def cash_history_report_rows(cursor, start, end, sucursal_id=None, cajero_id=Non
     return cursor.fetchall()
 
 
+def sales_report_rows(cursor, start, end, sucursal_id=None, cajero_id=None):
+    params = [g.user["cliente_id"], start, end + timedelta(days=1)]
+    filters = ["v.cliente_id=%s", "v.fecha_venta >= %s", "v.fecha_venta < %s"]
+    if role_code() == "ADMIN_TIENDA":
+        filters.append("v.sucursal_id=%s")
+        params.append(g.user.get("sucursal_id"))
+    elif sucursal_id:
+        filters.append("v.sucursal_id=%s")
+        params.append(sucursal_id)
+    if cajero_id:
+        filters.append("v.cajero_id=%s")
+        params.append(cajero_id)
+    cursor.execute(
+        f"""
+        SELECT
+            v.id,
+            v.numero_venta,
+            v.numero_comprobante,
+            v.fecha_venta,
+            v.estado,
+            COALESCE(s.nombre, 'Sin sucursal') AS sucursal,
+            COALESCE(CONCAT_WS(' ', caj.nombres, caj.apellido_paterno), caj.username, '-') AS cajero,
+            COALESCE(CONCAT_WS(' ', ven.nombres, ven.apellido_paterno), ven.username, '-') AS vendedor,
+            COALESCE((SELECT GROUP_CONCAT(DISTINCT vp.metodo_pago ORDER BY vp.metodo_pago SEPARATOR ', ') FROM venta_pagos vp WHERE vp.cliente_id=v.cliente_id AND vp.venta_id=v.id), '-') AS metodo_pago,
+            COALESCE(v.subtotal, 0) AS subtotal,
+            COALESCE(v.descuento_total, 0) AS descuento_total,
+            COALESCE(v.total, 0) AS total
+        FROM ventas v
+        LEFT JOIN sucursales s ON s.id=v.sucursal_id
+        LEFT JOIN usuarios caj ON caj.id=v.cajero_id
+        LEFT JOIN usuarios ven ON ven.id=v.vendedor_id
+        WHERE {' AND '.join(filters)}
+        ORDER BY v.fecha_venta DESC, v.id DESC
+        """,
+        tuple(params),
+    )
+    return cursor.fetchall()
+
+
 @dashboard_bp.route("/")
 @login_required
 def index():
@@ -333,19 +371,15 @@ def cash_history_pdf():
     period, start, end = resolve_period(request.args)
     sucursal_id = int(request.args.get("sucursal_id") or 0) or None
     cajero_id = int(request.args.get("cajero_id") or 0) or None
-    if role_code() == "ADMIN_TIENDA":
-        if sucursal_id and sucursal_id != g.user.get("sucursal_id"):
-            sucursal_id = g.user.get("sucursal_id")
+    if role_code() == "ADMIN_TIENDA" and sucursal_id and sucursal_id != g.user.get("sucursal_id"):
+        sucursal_id = g.user.get("sucursal_id")
     with db_cursor() as cursor:
         rows = cash_history_report_rows(cursor, start, end, sucursal_id=sucursal_id, cajero_id=cajero_id)
         sucursales = list_dashboard_sucursales(cursor)
         cajeros = list_dashboard_cashiers(cursor)
     sucursal_name = next((s["nombre"] for s in sucursales if sucursal_id and int(s["id"]) == int(sucursal_id)), "Todas" if role_code() == "ADMIN_GENERAL_NEGOCIO" else (g.user.get("sucursal_nombre") or "Mi tienda"))
     cajero_name = next((c["nombre_visible"] for c in cajeros if cajero_id and int(c["id"]) == int(cajero_id)), "Todos")
-    totals = {
-        "diferencia": sum((r.get("diferencia") or 0) for r in rows),
-        "total_recaudado": sum((r.get("total_recaudado") or 0) for r in rows),
-    }
+    totals = {"diferencia": sum((r.get("diferencia") or 0) for r in rows), "total_recaudado": sum((r.get("total_recaudado") or 0) for r in rows)}
     html = render_template(
         "reports/cash_history_pdf.html",
         rows=rows,
@@ -366,4 +400,48 @@ def cash_history_pdf():
     response = make_response(pdf_buffer.getvalue())
     response.headers["Content-Type"] = "application/pdf"
     response.headers["Content-Disposition"] = f"attachment; filename=historial-cajas-{start.isoformat()}-{end.isoformat()}.pdf"
+    return response
+
+
+@dashboard_bp.route("/ventas/reporte/pdf")
+@login_required
+def sales_report_pdf():
+    if role_code() not in {"ADMIN_GENERAL_NEGOCIO", "ADMIN_TIENDA"}:
+        return redirect(url_for("dashboard.index"))
+    period, start, end = resolve_period(request.args)
+    sucursal_id = int(request.args.get("sucursal_id") or 0) or None
+    cajero_id = int(request.args.get("cajero_id") or 0) or None
+    if role_code() == "ADMIN_TIENDA":
+        sucursal_id = g.user.get("sucursal_id")
+    with db_cursor() as cursor:
+        rows = sales_report_rows(cursor, start, end, sucursal_id=sucursal_id, cajero_id=cajero_id)
+        sucursales = list_dashboard_sucursales(cursor)
+        cajeros = list_dashboard_cashiers(cursor)
+    sucursal_name = next((s["nombre"] for s in sucursales if sucursal_id and int(s["id"]) == int(sucursal_id)), "Todas" if role_code() == "ADMIN_GENERAL_NEGOCIO" else (g.user.get("sucursal_nombre") or "Mi tienda"))
+    cajero_name = next((c["nombre_visible"] for c in cajeros if cajero_id and int(c["id"]) == int(cajero_id)), "Todos")
+    totals = {
+        "subtotal": sum((r.get("subtotal") or 0) for r in rows),
+        "descuento": sum((r.get("descuento_total") or 0) for r in rows),
+        "total": sum((r.get("total") or 0) for r in rows),
+    }
+    html = render_template(
+        "reports/sales_history_pdf.html",
+        rows=rows,
+        totals=totals,
+        periodo=period,
+        fecha_inicio=start,
+        fecha_fin=end,
+        generado_en=datetime.now(),
+        generado_por=user_full_name(),
+        cliente=g.user.get("cliente_nombre"),
+        sucursal_name=sucursal_name,
+        cajero_name=cajero_name,
+    )
+    pdf_buffer = BytesIO()
+    status = pisa.CreatePDF(html, dest=pdf_buffer, encoding="UTF-8")
+    if status.err:
+        return "No se pudo generar el PDF del reporte de ventas.", 500
+    response = make_response(pdf_buffer.getvalue())
+    response.headers["Content-Type"] = "application/pdf"
+    response.headers["Content-Disposition"] = f"attachment; filename=reporte-ventas-{start.isoformat()}-{end.isoformat()}.pdf"
     return response
