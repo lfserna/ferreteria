@@ -130,7 +130,7 @@ function renderCart() {
               <button class="remove-item" type="button" data-remove-item="${index}" aria-label="Eliminar producto" title="Eliminar" style="width:26px;height:26px;line-height:1;padding:0;border-radius:8px">🗑</button>
               <strong style="font-size:13px;font-weight:500">${esc(item.nombre)}</strong>
             </div>
-            <small>${esc(item.presentacion)} · ${esc(item.codigo_producto || '')}</small>
+            <small>${esc(item.presentacion)}</small>
           </div>
           <span style="font-size:12px">${saleMoney(item.precio_unitario * item.cantidad)}</span>
         </div>
@@ -140,7 +140,7 @@ function renderCart() {
           <button class="btn btn--ghost" type="button" data-qty-plus="${index}" aria-label="Sumar cantidad" style="width:28px;height:28px;padding:0">+</button>
           <input type="number" min="${item.precio_minimo}" max="${item.precio_estandar}" step="0.01" value="${item.precio_unitario}" data-cart-price="${index}" aria-label="Precio unitario" style="max-width:88px;height:28px;padding:2px 4px">
         </div>
-        <small>Estándar ${saleMoney(item.precio_estandar)} · mínimo ${saleMoney(item.precio_minimo)} · stock sucursal ${item.stock_local}</small>
+        <small>Estándar ${saleMoney(item.precio_estandar)} · mínimo ${saleMoney(item.precio_minimo)}</small>
       </article>
     `).join('');
   }
@@ -225,9 +225,8 @@ async function searchProducts() {
   results.innerHTML = products.map(product => {
     const vendible = isVendible(product);
     const minPrice = product.precio_minimo_venta !== null && product.precio_minimo_venta !== undefined ? saleMoney(product.precio_minimo_venta) : 'Sin precio mínimo';
-    const otras = product.stock_otras_ubicaciones || 'Sin disponibilidad en otras ubicaciones';
-    const stockLocal = parseInt(product.stock_local || 0, 10);
-    return `<article class="product-card"><div class="product-card__top"><div><h3>${esc(product.nombre)}</h3><span class="code">${esc(product.codigo_producto || '')} · ${esc(product.presentacion || 'Unidad')}</span></div><span class="price">${vendible ? saleMoney(product.precio_venta_estandar) : 'Sin precio'}</span></div><small>${esc(product.descripcion || '')}</small><span class="stock" title="Stock en esta sucursal: ${stockLocal}. Otras sucursales/almacenes: ${esc(otras)}">Precio mínimo: ${minPrice}</span><small title="${esc(product.stock_ubicaciones || '')}">Stock disponible visible al consultar inventario.</small>${vendible ? `<button class="btn btn--ghost" type="button" data-add-product='${JSON.stringify(product).replaceAll("'", "&apos;")}'>Añadir</button>` : '<button class="btn btn--ghost" type="button" disabled>Falta precio</button>'}</article>`;
+    const presentation = product.presentacion || 'Unidad';
+    return `<article class="product-card"><div class="product-card__top"><div><h3>${esc(product.nombre)}</h3><span class="code">${esc(presentation)}</span></div><span class="price">${vendible ? saleMoney(product.precio_venta_estandar) : 'Sin precio'}</span></div><small>${esc(product.descripcion || '')}</small><span class="stock">Precio mínimo: ${minPrice}</span>${vendible ? `<button class="btn btn--ghost" type="button" data-add-product='${JSON.stringify(product).replaceAll("'", "&apos;")}'>Añadir</button>` : '<button class="btn btn--ghost" type="button" disabled>Falta precio</button>'}</article>`;
   }).join('') || '<p class="empty">No se encontraron productos.</p>';
 }
 
