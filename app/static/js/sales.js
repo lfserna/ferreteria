@@ -224,10 +224,10 @@ async function searchProducts() {
   const results = $('#saleResults');
   results.innerHTML = products.map(product => {
     const vendible = isVendible(product);
-    const stockLocal = parseInt(product.stock_local || 0, 10);
+    const minPrice = product.precio_minimo_venta !== null && product.precio_minimo_venta !== undefined ? saleMoney(product.precio_minimo_venta) : 'Sin precio mínimo';
     const otras = product.stock_otras_ubicaciones || 'Sin disponibilidad en otras ubicaciones';
-    const stockClass = stockLocal > 0 ? 'stock' : 'stock danger-text';
-    return `<article class="product-card"><div class="product-card__top"><div><h3>${esc(product.nombre)}</h3><span class="code">${esc(product.codigo_producto || '')} · ${esc(product.presentacion || 'Unidad')}</span></div><span class="price">${vendible ? saleMoney(product.precio_venta_estandar) : 'Sin precio'}</span></div><small>${esc(product.descripcion || '')}</small><span class="${stockClass}" title="Otras sucursales/almacenes: ${esc(otras)}">Stock en esta sucursal: ${stockLocal}</span><small title="${esc(product.stock_ubicaciones || '')}">Pasa el mouse para ver otras disponibilidades.</small>${vendible ? `<button class="btn btn--ghost" type="button" data-add-product='${JSON.stringify(product).replaceAll("'", "&apos;")}'>Añadir</button>` : '<button class="btn btn--ghost" type="button" disabled>Falta precio</button>'}</article>`;
+    const stockLocal = parseInt(product.stock_local || 0, 10);
+    return `<article class="product-card"><div class="product-card__top"><div><h3>${esc(product.nombre)}</h3><span class="code">${esc(product.codigo_producto || '')} · ${esc(product.presentacion || 'Unidad')}</span></div><span class="price">${vendible ? saleMoney(product.precio_venta_estandar) : 'Sin precio'}</span></div><small>${esc(product.descripcion || '')}</small><span class="stock" title="Stock en esta sucursal: ${stockLocal}. Otras sucursales/almacenes: ${esc(otras)}">Precio mínimo: ${minPrice}</span><small title="${esc(product.stock_ubicaciones || '')}">Stock disponible visible al consultar inventario.</small>${vendible ? `<button class="btn btn--ghost" type="button" data-add-product='${JSON.stringify(product).replaceAll("'", "&apos;")}'>Añadir</button>` : '<button class="btn btn--ghost" type="button" disabled>Falta precio</button>'}</article>`;
   }).join('') || '<p class="empty">No se encontraron productos.</p>';
 }
 
