@@ -87,7 +87,9 @@ def inventory_rows(query="", location_id=None, category_id=None):
     with db_cursor() as c:
         c.execute(f"""
             SELECT p.id AS producto_id, p.nombre, p.descripcion, p.codigo_producto, p.codigo_barras,
-                   cat.nombre AS categoria, COALESCE(pr.precio_venta_estandar, 0) AS precio,
+                   cat.nombre AS categoria,
+                   COALESCE(pr.precio_venta_estandar, 0) AS precio,
+                   COALESCE(pr.precio_minimo_venta, 0) AS precio_minimo,
                    COALESCE(SUM(i.cantidad_disponible), 0) AS stock_total
             FROM productos p
             LEFT JOIN categorias_producto cat ON cat.id=p.categoria_id
@@ -102,7 +104,7 @@ def inventory_rows(query="", location_id=None, category_id=None):
               AND p.deleted_at IS NULL
               {category_filter}
               AND (p.nombre LIKE %s OR COALESCE(p.descripcion,'') LIKE %s OR COALESCE(p.codigo_producto,'') LIKE %s OR COALESCE(p.codigo_barras,'') LIKE %s)
-            GROUP BY p.id, cat.nombre, pr.precio_venta_estandar
+            GROUP BY p.id, cat.nombre, pr.precio_venta_estandar, pr.precio_minimo_venta
             ORDER BY p.nombre
             LIMIT 300
         """, tuple(params))
