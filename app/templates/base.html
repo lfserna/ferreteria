@@ -14,63 +14,214 @@
 {% set report_roles = ['ADMIN_GENERAL_NEGOCIO','ADMIN_TIENDA'] %}
 {% set user_roles = ['ADMIN_GENERAL_NEGOCIO','ADMIN_TIENDA'] %}
 {% set endpoint = request.endpoint or '' %}
+
 <aside class="sidebar" aria-label="Menú lateral">
     <a class="brand" href="{{ url_for('inventory.index') if current_user.rol_codigo == 'ADMIN_ALMACEN' else url_for('dashboard.index') }}" title="Ferretería">
         <span class="brand__mark">F</span>
-        <span class="brand__text"><strong>Ferretería</strong><small>Sistema multi-sucursal</small></span>
+        <span class="brand__text">
+            <strong>Ferretería</strong>
+            <small>Sistema multi-sucursal</small>
+        </span>
     </a>
+
     <nav class="side-nav">
         {% if current_user.rol_codigo != 'ADMIN_ALMACEN' %}
-        <a href="{{ url_for('dashboard.index') }}" class="nav-item {% if endpoint == 'dashboard.index' %}is-active{% endif %}" title="Inicio"><span class="nav-item__icon">⌂</span><span class="nav-item__label">Inicio</span></a>
+        <a href="{{ url_for('dashboard.index') }}" class="nav-item {% if endpoint == 'dashboard.index' %}is-active{% endif %}" title="Inicio">
+            <span class="nav-item__icon">⌂</span>
+            <span class="nav-item__label">Inicio</span>
+        </a>
         {% endif %}
+
         {% if current_user.rol_codigo in sales_roles %}
-        <a href="{{ url_for('sales.index') }}" class="nav-item nav-primary {% if endpoint.startswith('sales.') %}is-active{% endif %}" title="Vender"><span class="nav-item__icon">＋</span><span class="nav-item__label">Vender</span></a>
+        <a href="{{ url_for('sales.index') }}" class="nav-item nav-primary {% if endpoint.startswith('sales.') %}is-active{% endif %}" title="Vender">
+            <span class="nav-item__icon">＋</span>
+            <span class="nav-item__label">Vender</span>
+        </a>
         {% endif %}
-        <a href="{{ url_for('inventory.index') }}" class="nav-item {% if endpoint.startswith('inventory.') %}is-active{% endif %}" title="Inventario"><span class="nav-item__icon">▦</span><span class="nav-item__label">Inventario</span></a>
+
+        <a href="{{ url_for('inventory.index') }}" class="nav-item {% if endpoint.startswith('inventory.') %}is-active{% endif %}" title="Inventario">
+            <span class="nav-item__icon">▦</span>
+            <span class="nav-item__label">Inventario</span>
+        </a>
+
         {% if current_user.rol_codigo in report_roles %}
-        <a href="{{ url_for('reports.index') }}" class="nav-item {% if endpoint.startswith('reports.') %}is-active{% endif %}" title="Reportes"><span class="nav-item__icon">◷</span><span class="nav-item__label">Reportes</span></a>
+        <a href="{{ url_for('reports.index') }}" class="nav-item {% if endpoint.startswith('reports.') %}is-active{% endif %}" title="Reportes">
+            <span class="nav-item__icon">◷</span>
+            <span class="nav-item__label">Reportes</span>
+        </a>
         {% endif %}
+
         {% if current_user.rol_codigo in user_roles %}
-        <a href="{{ url_for('users.index') }}" class="nav-item {% if endpoint.startswith('users.') %}is-active{% endif %}" title="Usuarios"><span class="nav-item__icon">◉</span><span class="nav-item__label">Usuarios</span></a>
+        <a href="{{ url_for('users.index') }}" class="nav-item {% if endpoint.startswith('users.') %}is-active{% endif %}" title="Usuarios">
+            <span class="nav-item__icon">◉</span>
+            <span class="nav-item__label">Usuarios</span>
+        </a>
         {% endif %}
     </nav>
 </aside>
 {% endif %}
+
 <div class="app-shell {% if not current_user %}app-shell--guest{% endif %}">
     {% if current_user %}
     <header class="topbar">
-        <div><strong>{{ current_user.cliente_nombre }}</strong><small>{% if current_user.sucursal_nombre %}Sucursal: {{ current_user.sucursal_nombre }}{% endif %}{% if current_user.almacen_nombre %} · Almacén: {{ current_user.almacen_nombre }}{% endif %}</small></div>
-        <div class="user-pill"><span>{{ current_user.nombres }} {{ current_user.apellido_paterno }}</span><small>{{ current_user.rol_nombre }}</small><a href="{{ url_for('auth.logout') }}">Salir</a></div>
+        <div>
+            <strong>{{ current_user.cliente_nombre }}</strong>
+            <small>
+                {% if current_user.sucursal_nombre %}Sucursal: {{ current_user.sucursal_nombre }}{% endif %}
+                {% if current_user.almacen_nombre %} · Almacén: {{ current_user.almacen_nombre }}{% endif %}
+            </small>
+        </div>
+
+        <div class="user-pill">
+            <span>{{ current_user.nombres }} {{ current_user.apellido_paterno }}</span>
+            <small>{{ current_user.rol_nombre }}</small>
+            <a href="{{ url_for('auth.logout') }}">Salir</a>
+        </div>
     </header>
     {% endif %}
+
     <main class="content">
-        {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}<div class="flash-stack">{% for category, message in messages %}<div class="flash flash--{{ category }}">{{ message }}</div>{% endfor %}</div>{% endif %}{% endwith %}
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            <div class="flash-stack">
+                {% for category, message in messages %}
+                <div class="flash flash--{{ category }}">{{ message }}</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        {% endwith %}
+
         {% block content %}{% endblock %}
     </main>
 </div>
+
 {% if current_user %}
-<nav class="bottom-nav" aria-label="Navegación móvil">
+<nav
+    class="bottom-nav"
+    aria-label="Navegación móvil"
+    {% if current_user.rol_codigo in ['VENDEDOR','CAJERO'] %}style="grid-template-columns:repeat(4,minmax(0,1fr));"{% endif %}
+>
     {% if current_user.rol_codigo == 'ADMIN_ALMACEN' %}
-    <a href="{{ url_for('inventory.index') }}"><span>▦</span><small>Inventario</small></a>
-    <a href="{{ url_for('inventory.index') }}"><span>↥</span><small>Entradas</small></a>
-    <a href="{{ url_for('inventory.index') }}" class="bottom-nav__main"><span>▦</span><small>Stock</small></a>
-    <a href="{{ url_for('inventory.index') }}"><span>↧</span><small>Salidas</small></a>
-    <a href="{{ url_for('auth.logout') }}"><span>×</span><small>Salir</small></a>
-    {% elif current_user.rol_codigo in sales_roles %}
-    <a href="{{ url_for('dashboard.index') }}"><span>⌂</span><small>Inicio</small></a>
-    <a href="{{ url_for('inventory.index') }}"><span>▦</span><small>Inventario</small></a>
-    <a href="{{ url_for('sales.index') }}" class="bottom-nav__main"><span>＋</span><small>Vender</small></a>
-    {% if current_user.rol_codigo in report_roles %}<a href="{{ url_for('reports.index') }}"><span>◷</span><small>Reportes</small></a>{% else %}<a href="{{ url_for('inventory.index') }}"><span>↔</span><small>Inventario</small></a>{% endif %}
-    <a href="{{ url_for('auth.logout') }}"><span>×</span><small>Salir</small></a>
+
+    <a href="{{ url_for('inventory.index') }}">
+        <span>▦</span>
+        <small>Inventario</small>
+    </a>
+
+    <a href="{{ url_for('inventory.index') }}">
+        <span>↥</span>
+        <small>Entradas</small>
+    </a>
+
+    <a href="{{ url_for('inventory.index') }}" class="bottom-nav__main">
+        <span>▦</span>
+        <small>Stock</small>
+    </a>
+
+    <a href="{{ url_for('inventory.index') }}">
+        <span>↧</span>
+        <small>Salidas</small>
+    </a>
+
+    <a href="{{ url_for('auth.logout') }}">
+        <span>×</span>
+        <small>Salir</small>
+    </a>
+
+    {% elif current_user.rol_codigo in ['VENDEDOR','CAJERO'] %}
+
+    <a href="{{ url_for('dashboard.index') }}">
+        <span>⌂</span>
+        <small>Inicio</small>
+    </a>
+
+    <a href="{{ url_for('inventory.index') }}">
+        <span>▦</span>
+        <small>Inventario</small>
+    </a>
+
+    <a href="{{ url_for('sales.index') }}" class="bottom-nav__main">
+        <span>＋</span>
+        <small>Vender</small>
+    </a>
+
+    <a href="{{ url_for('auth.logout') }}">
+        <span>×</span>
+        <small>Salir</small>
+    </a>
+
+    {% elif current_user.rol_codigo == 'ADMIN_TIENDA' %}
+
+    <a href="{{ url_for('dashboard.index') }}">
+        <span>⌂</span>
+        <small>Inicio</small>
+    </a>
+
+    <a href="{{ url_for('inventory.index') }}">
+        <span>▦</span>
+        <small>Inventario</small>
+    </a>
+
+    <a href="{{ url_for('sales.index') }}" class="bottom-nav__main">
+        <span>＋</span>
+        <small>Vender</small>
+    </a>
+
+    <a href="{{ url_for('reports.index') }}">
+        <span>◷</span>
+        <small>Reportes</small>
+    </a>
+
+    <a href="{{ url_for('auth.logout') }}">
+        <span>×</span>
+        <small>Salir</small>
+    </a>
+
     {% else %}
-    <a href="{{ url_for('auth.logout') }}"><span>×</span><small>Salir</small></a>
-    <a href="{{ url_for('inventory.index') }}"><span>▦</span><small>Inventario</small></a>
-    <a href="{{ url_for('dashboard.index') }}" class="bottom-nav__main"><span>⌂</span><small>Inicio</small></a>
-    {% if current_user.rol_codigo in report_roles %}<a href="{{ url_for('reports.index') }}"><span>◷</span><small>Reportes</small></a>{% else %}<a href="{{ url_for('inventory.index') }}"><span>↔</span><small>Inventario</small></a>{% endif %}
-    {% if current_user.rol_codigo in user_roles %}<a href="{{ url_for('users.index') }}"><span>◉</span><small>Usuarios</small></a>{% else %}<a href="{{ url_for('auth.logout') }}"><span>×</span><small>Salir</small></a>{% endif %}
+
+    <a href="{{ url_for('auth.logout') }}">
+        <span>×</span>
+        <small>Salir</small>
+    </a>
+
+    <a href="{{ url_for('inventory.index') }}">
+        <span>▦</span>
+        <small>Inventario</small>
+    </a>
+
+    <a href="{{ url_for('dashboard.index') }}" class="bottom-nav__main">
+        <span>⌂</span>
+        <small>Inicio</small>
+    </a>
+
+    {% if current_user.rol_codigo in report_roles %}
+    <a href="{{ url_for('reports.index') }}">
+        <span>◷</span>
+        <small>Reportes</small>
+    </a>
+    {% else %}
+    <a href="{{ url_for('inventory.index') }}">
+        <span>↔</span>
+        <small>Inventario</small>
+    </a>
+    {% endif %}
+
+    {% if current_user.rol_codigo in user_roles %}
+    <a href="{{ url_for('users.index') }}">
+        <span>◉</span>
+        <small>Usuarios</small>
+    </a>
+    {% else %}
+    <a href="{{ url_for('auth.logout') }}">
+        <span>×</span>
+        <small>Salir</small>
+    </a>
+    {% endif %}
+
     {% endif %}
 </nav>
 {% endif %}
+
 <script src="{{ url_for('static', filename='js/app.js') }}?v=20260624-2"></script>
 {% block scripts %}{% endblock %}
 </body>
