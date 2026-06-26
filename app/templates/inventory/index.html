@@ -3,6 +3,15 @@
 {% block content %}
 {% set can_report_inventory = current_user and current_user.rol_codigo in ['ADMIN_GENERAL_NEGOCIO','ADMIN_TIENDA'] %}
 {% set report_locations = origenes if current_user and current_user.rol_codigo == 'ADMIN_TIENDA' else ubicaciones %}
+{% set vendor_mobile_clean = current_user and current_user.rol_codigo == 'VENDEDOR' %}
+{% if vendor_mobile_clean %}
+<style>
+@media (max-width:720px){
+  .seller-mobile-hide{display:none!important;}
+  .seller-inventory-table{min-width:440px!important;}
+}
+</style>
+{% endif %}
 <section class="page-heading">
     <div>
         <p class="eyebrow">Inventario</p>
@@ -36,11 +45,11 @@
         </label>
     </form>
     <div class="responsive-table">
-        <table>
-            <thead><tr><th>Producto</th><th>Código</th><th>Categoría</th><th>Precio Bs</th><th>Stock</th><th>Acciones</th></tr></thead>
+        <table class="{% if vendor_mobile_clean %}seller-inventory-table{% endif %}">
+            <thead><tr><th>Producto</th><th class="seller-mobile-hide">Código</th><th>Categoría</th><th>Precio Bs</th><th class="seller-mobile-hide">Stock</th><th>Acciones</th></tr></thead>
             <tbody id="inventoryRows">
                 {% for row in rows %}
-                <tr><td><strong>{{ row.nombre }}</strong><small>{{ row.descripcion or '' }}</small></td><td>{{ row.codigo_producto or '-' }}<small>{{ row.codigo_barras or '' }}</small></td><td>{{ row.categoria or '-' }}</td><td>{{ '%.2f'|format(row.precio or 0) }}</td><td>{{ row.stock_total|int }}</td><td><button class="btn btn--ghost" type="button" data-product-id="{{ row.producto_id }}" data-product-name="{{ row.nombre }}">Ver</button></td></tr>
+                <tr><td><strong>{{ row.nombre }}</strong><small>{{ row.descripcion or '' }}</small></td><td class="seller-mobile-hide">{{ row.codigo_producto or '-' }}<small>{{ row.codigo_barras or '' }}</small></td><td>{{ row.categoria or '-' }}</td><td>{{ '%.2f'|format(row.precio or 0) }}</td><td class="seller-mobile-hide">{{ row.stock_total|int }}</td><td><button class="btn btn--ghost" type="button" data-product-id="{{ row.producto_id }}" data-product-name="{{ row.nombre }}">Ver</button></td></tr>
                 {% else %}
                 <tr><td colspan="6">Sin productos registrados.</td></tr>
                 {% endfor %}
@@ -152,4 +161,4 @@
 
 <div class="modal" id="inventoryModal"><div class="modal__backdrop" data-close-modal></div><div class="modal__content"><div class="modal__header"><h2 id="inventoryModalTitle">Producto</h2><button class="icon-btn" type="button" data-close-modal>×</button></div><div id="inventoryProductDetail" class="stack-list"></div>{% if can_manage %}<section id="inventoryManagePanel" hidden><hr><h3>Gestionar stock</h3><form class="form-stack" method="post" action="{{ url_for('inventory.movimiento') }}"><input type="hidden" name="producto_id" id="movementProductId"><label>Tipo <select name="tipo_movimiento"><option value="ENTRADA">Entrada</option><option value="SALIDA">Salida</option><option value="TRASPASO">Traspaso</option></select></label><label>Cantidad <input type="number" name="cantidad" min="1" step="1" required></label><label>Origen {% if current_user and current_user.rol_codigo == 'ADMIN_ALMACEN' and origenes|length == 1 %}<select name="ubicacion_origen_id"><option value="{{ origenes[0].id }}" selected>{{ origenes[0].nombre }}</option></select><small>Origen fijo según el almacén asignado a tu usuario.</small>{% else %}<select name="ubicacion_origen_id"><option value="">Sin origen</option>{% for u in origenes %}<option value="{{ u.id }}">{{ u.nombre }}</option>{% endfor %}</select>{% endif %}</label><label>Destino <select name="ubicacion_destino_id"><option value="">Sin destino</option>{% for u in destinos %}<option value="{{ u.id }}">{{ u.nombre }}</option>{% endfor %}</select></label><label>Observación <input name="observacion"></label><button class="btn btn--primary" type="submit">Registrar movimiento</button></form><hr><form class="form-stack" method="post" action="{{ url_for('inventory.ajustar') }}"><input type="hidden" name="producto_id" id="adjustProductId"><label>Ubicación <select name="ubicacion_stock_id" required>{% for u in origenes %}<option value="{{ u.id }}">{{ u.nombre }}</option>{% endfor %}</select></label><label>Stock exacto <input type="number" name="cantidad_disponible" min="1" step="1" required></label><label>Stock mínimo <input type="number" name="cantidad_minima" min="0" step="1" value="0"></label><label>Observación <input name="observacion"></label><button class="btn btn--secondary" type="submit">Actualizar stock</button></form></section>{% endif %}</div></div>
 {% endblock %}
-{% block scripts %}<script>window.inventoryCanEditCatalog={{ 'true' if can_edit_catalog else 'false' }};window.inventoryCanManage={{ 'true' if can_manage else 'false' }};</script><script src="https://unpkg.com/html5-qrcode" defer></script><script src="{{ url_for('static', filename='js/inventory.js') }}?v=20260625-3"></script>{% endblock %}
+{% block scripts %}<script>window.inventoryCanEditCatalog={{ 'true' if can_edit_catalog else 'false' }};window.inventoryCanManage={{ 'true' if can_manage else 'false' }};</script><script src="https://unpkg.com/html5-qrcode" defer></script><script src="{{ url_for('static', filename='js/inventory.js') }}?v=20260626-1"></script>{% endblock %}
