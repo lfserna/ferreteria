@@ -12,12 +12,8 @@ body{width:52mm;margin:0 auto;font-family:"Courier New",Courier,monospace;font-s
 .item-table{width:52mm;border-collapse:collapse;table-layout:fixed}
 .item-table col.qty{width:8mm}.item-table col.unit{width:13mm}.item-table col.discount{width:13mm}.item-table col.subtotal{width:18mm}
 .item-table th{padding:0 1mm 1mm 0;text-transform:uppercase;text-align:right;white-space:nowrap}
-.item-table th:first-child{text-align:left}
-.item-table td{padding:0 1mm 1mm 0;vertical-align:top;text-align:right;white-space:nowrap}
-.item-table td:first-child{text-align:left}
-.item-name-row td{padding:3px 0 1px 0;text-align:left;white-space:normal;word-break:break-word}
-.item-values td{padding-bottom:2px}
-.totals{padding:4px 0;margin-top:4px}
+.item-table th:first-child{text-align:left}.item-table td{padding:0 1mm 1mm 0;vertical-align:top;text-align:right;white-space:nowrap}.item-table td:first-child{text-align:left}
+.item-name-row td{padding:3px 0 1px 0;text-align:left;white-space:normal;word-break:break-word}.item-values td{padding-bottom:2px}.totals{padding:4px 0;margin-top:4px}.badge{font-size:8px;text-transform:uppercase}
 @media print{.actions{display:none}body{width:52mm}}
 </style>
 </head>
@@ -25,7 +21,7 @@ body{width:52mm;margin:0 auto;font-family:"Courier New",Courier,monospace;font-s
 <div class="ticket">
     <div class="actions"><button onclick="window.print()">Imprimir</button><a href="{{ url_for('sales.comprobante_pdf', venta_id=venta.id) }}">PDF</a></div>
     <header class="center">
-        <p class="title">{{ venta.cliente_nombre }}</p>
+        <p class="title">{{ venta.negocio_nombre or venta.cliente_nombre }}</p>
         <p class="subtitle">{{ venta.sucursal_nombre or 'Sucursal' }}</p>
         <p>COMPROBANTE DE VENTA</p>
     </header>
@@ -35,38 +31,23 @@ body{width:52mm;margin:0 auto;font-family:"Courier New",Courier,monospace;font-s
         <p>Cajero ID: {{ venta.cajero_id }}</p>
         <p>Vendedor ID: {{ venta.vendedor_id or '-' }}</p>
         <p>Pago: {{ venta.metodo_pago or '-' }}</p>
+        {% if venta.cliente_final_nombre or venta.cliente_celular or venta.cliente_carnet %}
+        <p>Cliente: {{ venta.cliente_final_nombre or '-' }}</p>
+        {% if venta.cliente_celular %}<p>Celular: {{ venta.cliente_celular }}</p>{% endif %}
+        {% if venta.cliente_carnet %}<p>Carnet: {{ venta.cliente_carnet }}</p>{% endif %}
+        {% endif %}
+        {% if venta.tipo_entrega %}<p>Entrega: {{ 'Envío' if venta.tipo_entrega == 'ENVIO' else 'Tienda' }}</p>{% endif %}
+        {% if venta.ciudad_destino %}<p>Ciudad: {{ venta.ciudad_destino }}</p>{% endif %}
+        {% if venta.detalle_envio %}<p>Detalle: {{ venta.detalle_envio }}</p>{% endif %}
     </section>
     <p class="section-title">Detalle</p>
-    <table class="item-table">
-        <colgroup>
-            <col class="qty">
-            <col class="unit">
-            <col class="discount">
-            <col class="subtotal">
-        </colgroup>
-        <thead>
-            <tr>
-                <th>Cant</th>
-                <th>P.Unit</th>
-                <th>Desc</th>
-                <th>Subtotal</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for item in venta.detalles %}
-            <tr class="item-name-row"><td colspan="4">{{ item.nombre }}</td></tr>
-            <tr class="item-values">
-                <td>{{ item.cantidad|int }}</td>
-                <td>{{ '%.2f'|format(item.precio_unitario) }}</td>
-                <td>{{ '%.2f'|format(item.descuento) }}</td>
-                <td>{{ '%.2f'|format(item.subtotal) }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    <section class="totals">
-        <p class="row"><span>TOTAL</span><span>Bs {{ '%.2f'|format(venta.total) }}</span></p>
-    </section>
+    <table class="item-table"><colgroup><col class="qty"><col class="unit"><col class="discount"><col class="subtotal"></colgroup><thead><tr><th>Cant</th><th>P.Unit</th><th>Desc</th><th>Subtotal</th></tr></thead><tbody>
+        {% for item in venta.detalles %}
+        <tr class="item-name-row"><td colspan="4">{{ item.nombre }}{% if item.es_yapa %} <span class="badge">YAPA</span>{% endif %}</td></tr>
+        <tr class="item-values"><td>{{ item.cantidad|int }}</td><td>{{ '%.2f'|format(item.precio_unitario) }}</td><td>{{ '%.2f'|format(item.descuento) }}</td><td>{{ '%.2f'|format(item.subtotal) }}</td></tr>
+        {% endfor %}
+    </tbody></table>
+    <section class="totals"><p class="row"><span>TOTAL</span><span>Bs {{ '%.2f'|format(venta.total) }}</span></p></section>
     <p class="center">Gracias por su compra</p>
 </div>
 </body>
