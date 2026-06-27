@@ -1,10 +1,12 @@
 from app.database import db_cursor
+from app.services.price_schema_service import ensure_extra_price_columns
 
 
 def search_products(cliente_id: int, query: str = "", limit: int = 30, ubicacion_stock_id: int | None = None):
     search = f"%{query.strip()}%"
     local_location = ubicacion_stock_id or 0
-    with db_cursor() as cursor:
+    with db_cursor(commit=True) as cursor:
+        ensure_extra_price_columns(cursor)
         cursor.execute(
             """
             SELECT p.id AS producto_id,
@@ -19,6 +21,10 @@ def search_products(cliente_id: int, query: str = "", limit: int = 30, ubicacion
                    COALESCE(pp.factor_unidad_base, 1) AS factor_unidad_base,
                    pr.precio_venta_estandar,
                    pr.precio_minimo_venta,
+                   pr.precio_cuarta,
+                   pr.precio_media,
+                   pr.precio_docena,
+                   pr.precio_caja,
                    CASE WHEN pp.id IS NOT NULL AND pr.id IS NOT NULL AND pr.precio_venta_estandar > 0 THEN 1 ELSE 0 END AS vendible,
                    COALESCE(stock.stock_total, 0) AS stock_total,
                    CASE WHEN %s = 0 THEN COALESCE(stock.stock_total,0) ELSE COALESCE(stock.stock_local, 0) END AS stock_local,
