@@ -1,6 +1,7 @@
 from io import BytesIO
 
 from flask import Blueprint, flash, g, jsonify, make_response, redirect, render_template, request, url_for
+from mysql.connector.errors import DatabaseError
 from xhtml2pdf import pisa
 
 from app.database import db_cursor
@@ -37,10 +38,18 @@ def selected_seller_id_from_payload(payload):
     try: return int(raw)
     except (TypeError, ValueError): return None
 
+def ddl_temporal(exc):
+    return getattr(exc, "errno", None) == 1684 or "concurrent DDL" in str(exc) or "definition is being modified" in str(exc)
+
 def sales_state_payload(ubicacion_stock_id=None):
     if not can_confirm_sales(): return {"caja": None, "pending_orders": []}
     if ubicacion_stock_id is None: ubicacion_stock_id = current_stock_location()
-    return {"caja": cash_summary(g.user["cliente_id"], g.user["id"], ubicacion_stock_id), "pending_orders": list_pending_orders(g.user["cliente_id"], g.user.get("sucursal_id"))}
+    try:
+        caja = cash_summary(g.user["cliente_id"], g.user["id"], ubicacion_stock_id)
+    except DatabaseError as exc:
+        if not ddl_temporal(exc): raise
+        caja = None
+    return {"caja": caja, "pending_orders": list_pending_orders(g.user["cliente_id"], g.user.get("sucursal_id"))}
 
 
 @sales_bp.route("")
@@ -88,7 +97,10 @@ def api_productos():
 @login_required
 def api_estado():
     if not can_access_sales(): return jsonify({"error": "Tu rol no tiene acceso a ventas."}), 403
-    return jsonify(to_jsonable(sales_state_payload()))
+    try: return jsonify(to_jsonable(sales_state_payload()))
+    except DatabaseError as exc:
+        if not ddl_temporal(exc): raise
+        return jsonify({"caja": None, "pending_orders": [], "schema_busy": True})
 
 
 @sales_bp.route("/api/ordenes/<int:orden_id>")
@@ -121,7 +133,11 @@ def confirmar():
     try:
         caja = require_open_cash(g.user["cliente_id"], g.user["id"], ubicacion_stock_id)
         result = confirm_sale_from_cart(cliente_id=g.user["cliente_id"], sucursal_id=g.user.get("sucursal_id"), ubicacion_stock_id=ubicacion_stock_id, cajero_id=g.user["id"], vendedor_id=selected_seller_id_from_payload(payload), created_by=g.user["id"], items=payload.get("items", []), metodo_pago=payload.get("metodo_pago"), idempotency_key=payload.get("idempotency_key"), orden_id=payload.get("orden_id"), caja_sesion_id=(caja.get("session") or {}).get("id"), cliente_data=payload.get("cliente"))
-        result.update(sales_state_payload(ubicacion_stock_id)); return jsonify(to_jsonable(result)), 201
+        try: result.update(sales_state_payload(ubicacion_stock_id))
+        except DatabaseError as exc:
+            if not ddl_temporal(exc): raise
+            result.update({"caja": None, "pending_orders": [], "schema_busy": True})
+        return jsonify(to_jsonable(result)), 201
     except ValueError as exc: return jsonify({"error": str(exc)}), 400
 
 
