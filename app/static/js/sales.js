@@ -11,29 +11,22 @@ const saleState = {
 
 const $ = selector => document.querySelector(selector);
 
-function saleMoney(value) {
-  return `Bs ${Number(value || 0).toFixed(2)}`;
-}
+function saleMoney(value) { return `Bs ${Number(value || 0).toFixed(2)}`; }
+function esc(value) { return String(value ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function currentLayout() { return document.querySelector('.sale-layout'); }
+function newIdempotencyKey() { return window.crypto && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`; }
+function isVendible(product) { return Number(product.vendible || 0) === 1 && product.presentacion_id && product.precio_venta_estandar !== null && product.precio_minimo_venta !== null; }
+function cashIsOpen() { return currentLayout()?.dataset.cashOpen === '1'; }
 
-function esc(value) {
-  return String(value ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
-
-function currentLayout() {
-  return document.querySelector('.sale-layout');
-}
-
-function newIdempotencyKey() {
-  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function isVendible(product) {
-  return Number(product.vendible || 0) === 1 && product.presentacion_id && product.precio_venta_estandar !== null && product.precio_minimo_venta !== null;
-}
-
-function cashIsOpen() {
-  return currentLayout()?.dataset.cashOpen === '1';
+function cleanSellerMobileNav() {
+  const layout = currentLayout();
+  const nav = document.querySelector('.bottom-nav');
+  if (!layout || !nav) return;
+  const isSellerScreen = layout.dataset.canConfirm === '0' && layout.dataset.canSendOrder === '1';
+  if (!isSellerScreen) return;
+  const inventoryLinks = Array.from(nav.querySelectorAll('a')).filter(link => (link.textContent || '').trim().toLowerCase().includes('inventario'));
+  inventoryLinks.slice(1).forEach(link => link.remove());
+  nav.style.gridTemplateColumns = `repeat(${nav.querySelectorAll('a').length}, minmax(0, 1fr))`;
 }
 
 function updateSellerChips() {
@@ -46,73 +39,54 @@ function updateSellerChips() {
     chip.style.boxShadow = selected ? '0 0 0 2px rgba(96,165,250,.18)' : 'none';
   });
 }
-
-function setSeller(id, name) {
-  saleState.selectedSellerId = id ? String(id) : '';
-  saleState.selectedSellerName = id ? (name || `ID ${id}`) : 'Sin vendedor';
-  updateSellerLabel();
-  updateSellerChips();
-}
-
-function toggleSeller(id, name) {
-  const normalizedId = id ? String(id) : '';
-  if (!normalizedId || saleState.selectedSellerId === normalizedId) {
-    setSeller('', 'Sin vendedor');
-    return;
-  }
-  setSeller(normalizedId, name || `ID ${normalizedId}`);
-}
-
-function initSeller() {
-  const layout = currentLayout();
-  saleState.defaultSellerId = layout?.dataset.currentSellerId || '';
-  saleState.defaultSellerName = layout?.dataset.currentSellerName || 'Sin vendedor';
-  setSeller(saleState.defaultSellerId, saleState.defaultSellerName);
-}
-
-function updateSellerLabel() {
-  const label = $('#cartSellerLabel');
-  if (label) label.textContent = `Vendedor: ${saleState.selectedSellerName || 'Sin vendedor'}${saleState.selectedSellerId ? ` · ID ${saleState.selectedSellerId}` : ''}`;
-}
-
-function resetSellerToDefault() {
-  setSeller(saleState.defaultSellerId, saleState.defaultSellerName);
-}
+function setSeller(id, name) { saleState.selectedSellerId = id ? String(id) : ''; saleState.selectedSellerName = id ? (name || `ID ${id}`) : 'Sin vendedor'; updateSellerLabel(); updateSellerChips(); }
+function toggleSeller(id, name) { const normalizedId = id ? String(id) : ''; if (!normalizedId || saleState.selectedSellerId === normalizedId) return setSeller('', 'Sin vendedor'); setSeller(normalizedId, name || `ID ${normalizedId}`); }
+function initSeller() { const layout = currentLayout(); saleState.defaultSellerId = layout?.dataset.currentSellerId || ''; saleState.defaultSellerName = layout?.dataset.currentSellerName || 'Sin vendedor'; setSeller(saleState.defaultSellerId, saleState.defaultSellerName); }
+function updateSellerLabel() { const label = $('#cartSellerLabel'); if (label) label.textContent = `Vendedor: ${saleState.selectedSellerName || 'Sin vendedor'}${saleState.selectedSellerId ? ` · ID ${saleState.selectedSellerId}` : ''}`; }
+function resetSellerToDefault() { setSeller(saleState.defaultSellerId, saleState.defaultSellerName); }
 
 function normalizeItem(product) {
   return {
     producto_id: product.producto_id,
     presentacion_id: product.presentacion_id,
     nombre: product.nombre,
-    codigo_producto: product.codigo_producto,
     presentacion: product.presentacion || 'Unidad',
     cantidad: 1,
     precio_estandar: Number(product.precio_venta_estandar),
     precio_minimo: Number(product.precio_minimo_venta),
     precio_unitario: Number(product.precio_venta_estandar),
-    stock_total: parseInt(product.stock_total || 0, 10),
-    stock_local: parseInt(product.stock_local || 0, 10),
+    precio_cuarta: product.precio_cuarta,
+    precio_media: product.precio_media,
+    precio_docena: product.precio_docena,
+    precio_caja: product.precio_caja,
+    es_yapa: false,
   };
 }
 
 function addToCart(product) {
-  if (!isVendible(product)) {
-    alert('Este producto todavía no tiene precio o presentación configurada.');
-    return;
-  }
-  const existing = saleState.cart.find(item => item.presentacion_id === product.presentacion_id);
+  if (!isVendible(product)) return alert('Este producto todavía no tiene precio o presentación configurada.');
+  const existing = saleState.cart.find(item => item.presentacion_id === product.presentacion_id && !item.es_yapa);
   if (existing) existing.cantidad += 1;
   else saleState.cart.push(normalizeItem(product));
   saleState.orderId = null;
   renderCart();
 }
 
+function itemTotal(item) { return item.es_yapa ? 0 : item.precio_unitario * item.cantidad; }
 function totals() {
   return saleState.cart.reduce((acc, item) => {
     acc.subtotal += item.precio_estandar * item.cantidad;
-    acc.total += item.precio_unitario * item.cantidad;
+    acc.total += itemTotal(item);
     return acc;
   }, { subtotal: 0, total: 0, discount: 0 });
+}
+function optionalPriceLine(item) {
+  const parts = [];
+  if (Number(item.precio_cuarta || 0) > 0) parts.push(`1/4 ${saleMoney(item.precio_cuarta)}`);
+  if (Number(item.precio_media || 0) > 0) parts.push(`1/2 ${saleMoney(item.precio_media)}`);
+  if (Number(item.precio_docena || 0) > 0) parts.push(`Docena ${saleMoney(item.precio_docena)}`);
+  if (Number(item.precio_caja || 0) > 0) parts.push(`Caja ${saleMoney(item.precio_caja)}`);
+  return parts.length ? `<small>${parts.join(' · ')}</small>` : '';
 }
 
 function renderCart() {
@@ -125,21 +99,16 @@ function renderCart() {
     container.innerHTML = saleState.cart.map((item, index) => `
       <article class="cart-item" style="padding:8px 0">
         <div class="cart-item__title" style="gap:6px;align-items:flex-start">
-          <div style="min-width:0;flex:1">
-            <div style="display:flex;gap:6px;align-items:center">
-              <button class="remove-item" type="button" data-remove-item="${index}" aria-label="Eliminar producto" title="Eliminar" style="width:26px;height:26px;line-height:1;padding:0;border-radius:8px">🗑</button>
-              <strong style="font-size:13px;font-weight:500">${esc(item.nombre)}</strong>
-            </div>
-            <small>${esc(item.presentacion)}</small>
-          </div>
-          <span style="font-size:12px">${saleMoney(item.precio_unitario * item.cantidad)}</span>
+          <div style="min-width:0;flex:1"><div style="display:flex;gap:6px;align-items:center"><button class="remove-item" type="button" data-remove-item="${index}" aria-label="Eliminar producto" title="Eliminar" style="width:26px;height:26px;line-height:1;padding:0;border-radius:8px">🗑</button><strong style="font-size:13px;font-weight:500">${esc(item.nombre)}</strong></div><small>${esc(item.presentacion)}${item.es_yapa ? ' · YAPA' : ''}</small></div>
+          <span style="font-size:12px">${saleMoney(itemTotal(item))}</span>
         </div>
         <div class="cart-item__controls" style="gap:4px;align-items:center">
           <button class="btn btn--ghost" type="button" data-qty-minus="${index}" aria-label="Restar cantidad" style="width:28px;height:28px;padding:0">−</button>
           <input type="number" min="1" step="1" value="${item.cantidad}" data-cart-qty="${index}" aria-label="Cantidad" style="max-width:52px;height:28px;text-align:center;padding:2px 4px">
           <button class="btn btn--ghost" type="button" data-qty-plus="${index}" aria-label="Sumar cantidad" style="width:28px;height:28px;padding:0">+</button>
-          <input type="number" min="${item.precio_minimo}" max="${item.precio_estandar}" step="0.01" value="${item.precio_unitario}" data-cart-price="${index}" aria-label="Precio unitario" style="max-width:88px;height:28px;padding:2px 4px">
+          <input type="number" min="${item.precio_minimo}" max="${item.precio_estandar}" step="0.01" value="${item.es_yapa ? 0 : item.precio_unitario}" data-cart-price="${index}" aria-label="Precio unitario" ${item.es_yapa ? 'disabled' : ''} style="max-width:88px;height:28px;padding:2px 4px">
         </div>
+        <label style="display:flex;align-items:center;gap:8px;margin:6px 0 2px;font-size:12px"><input type="checkbox" data-yapa-toggle="${index}" ${item.es_yapa ? 'checked' : ''}> Marcar como yapa / gratis</label>
         <small>Estándar ${saleMoney(item.precio_estandar)} · mínimo ${saleMoney(item.precio_minimo)}</small>
       </article>
     `).join('');
@@ -151,11 +120,7 @@ function renderCart() {
   $('#cartTotal').textContent = saleMoney(t.total);
 }
 
-function setText(selector, value) {
-  const node = $(selector);
-  if (node) node.textContent = value;
-}
-
+function setText(selector, value) { const node = $(selector); if (node) node.textContent = value; }
 function updateCashView(caja) {
   if (!caja || !caja.session) return;
   const session = caja.session;
@@ -165,266 +130,97 @@ function updateCashView(caja) {
   const salesQr = Number(caja.ventas_qr || 0);
   const expectedCash = Number(caja.esperado_efectivo || 0);
   const expectedQr = Number(caja.esperado_qr || 0);
-  setText('#cashQuickInitialCash', saleMoney(initialCash));
-  setText('#cashQuickInitialQr', saleMoney(initialQr));
-  setText('#cashQuickExpectedCash', saleMoney(expectedCash));
-  setText('#cashQuickExpectedQr', saleMoney(expectedQr));
-  setText('#cashCloseInitialCash', saleMoney(initialCash));
-  setText('#cashCloseInitialQr', saleMoney(initialQr));
-  setText('#cashCloseSalesCash', saleMoney(salesCash));
-  setText('#cashCloseSalesQr', saleMoney(salesQr));
-  setText('#cashCloseExpectedCash', saleMoney(expectedCash));
-  setText('#cashCloseExpectedQr', saleMoney(expectedQr));
-  const form = $('#cashCloseForm');
-  const cash = $('#cashFinalCash');
-  const qr = $('#cashFinalQr');
-  if (form) {
-    form.dataset.expectedCash = expectedCash.toFixed(2);
-    form.dataset.expectedQr = expectedQr.toFixed(2);
-  }
+  setText('#cashQuickInitialCash', saleMoney(initialCash)); setText('#cashQuickInitialQr', saleMoney(initialQr)); setText('#cashQuickExpectedCash', saleMoney(expectedCash)); setText('#cashQuickExpectedQr', saleMoney(expectedQr));
+  setText('#cashCloseInitialCash', saleMoney(initialCash)); setText('#cashCloseInitialQr', saleMoney(initialQr)); setText('#cashCloseSalesCash', saleMoney(salesCash)); setText('#cashCloseSalesQr', saleMoney(salesQr)); setText('#cashCloseExpectedCash', saleMoney(expectedCash)); setText('#cashCloseExpectedQr', saleMoney(expectedQr));
+  const form = $('#cashCloseForm'); const cash = $('#cashFinalCash'); const qr = $('#cashFinalQr');
+  if (form) { form.dataset.expectedCash = expectedCash.toFixed(2); form.dataset.expectedQr = expectedQr.toFixed(2); }
   if (cash && document.activeElement !== cash) cash.value = expectedCash.toFixed(2);
   if (qr && document.activeElement !== qr) qr.value = expectedQr.toFixed(2);
   if (typeof window.bindCashCloseDifference === 'function') window.bindCashCloseDifference();
 }
-
 function renderPendingOrders(orders) {
-  const panel = $('#pendingOrdersPanel');
-  const list = $('#pendingOrdersList');
-  if (!panel || !list) return;
-  const rows = Array.isArray(orders) ? orders : [];
-  panel.hidden = rows.length === 0;
-  list.innerHTML = rows.map(order => {
-    const detalles = Array.isArray(order.detalles) ? order.detalles : [];
-    const preview = detalles.slice(0, 4).map(item => `<small style="display:block">${parseInt(item.cantidad || 0, 10)} × ${esc(item.nombre)} · ${saleMoney(item.precio_unitario)}</small>`).join('');
-    const extra = detalles.length > 4 ? `<small>+ ${detalles.length - 4} productos más</small>` : '';
-    return `<article class="order-chip" data-pending-order="${order.id}" style="text-align:left;min-width:260px;max-width:360px">
-      <strong>${esc(order.codigo_orden)}</strong>
-      <small>${parseInt(order.items || detalles.length || 0, 10)} items · ${esc(order.vendedor_nombre || 'Sin vendedor')} · ${saleMoney(order.total_estimado)}</small>
-      <div style="margin-top:6px">${preview}${extra}</div>
-      <button class="btn btn--ghost btn--block" type="button" data-load-order="${order.id}" style="margin-top:8px">Cargar carrito</button>
-    </article>`;
-  }).join('');
+  const panel = $('#pendingOrdersPanel'); const list = $('#pendingOrdersList'); if (!panel || !list) return;
+  const rows = Array.isArray(orders) ? orders : []; panel.hidden = rows.length === 0;
+  list.innerHTML = rows.map(order => { const detalles = Array.isArray(order.detalles) ? order.detalles : []; const preview = detalles.slice(0, 4).map(item => `<small style="display:block">${parseInt(item.cantidad || 0, 10)} × ${esc(item.nombre)} · ${saleMoney(item.precio_unitario)}${Number(item.es_yapa||0) ? ' · YAPA' : ''}</small>`).join(''); const extra = detalles.length > 4 ? `<small>+ ${detalles.length - 4} productos más</small>` : ''; return `<article class="order-chip" data-pending-order="${order.id}" style="text-align:left;min-width:260px;max-width:360px"><strong>${esc(order.codigo_orden)}</strong><small>${parseInt(order.items || detalles.length || 0, 10)} items · ${esc(order.vendedor_nombre || 'Sin vendedor')} · ${saleMoney(order.total_estimado)}</small><div style="margin-top:6px">${preview}${extra}</div><button class="btn btn--ghost btn--block" type="button" data-load-order="${order.id}" style="margin-top:8px">Cargar carrito</button></article>`; }).join('');
 }
-
-async function refreshSalesState() {
-  if (currentLayout()?.dataset.canConfirm !== '1') return;
-  try {
-    const response = await fetch('/ventas/api/estado', { headers: { 'Accept': 'application/json' } });
-    if (!response.ok) return;
-    const data = await response.json();
-    updateCashView(data.caja);
-    renderPendingOrders(data.pending_orders);
-  } catch (error) {}
-}
+async function refreshSalesState() { if (currentLayout()?.dataset.canConfirm !== '1') return; try { const response = await fetch('/ventas/api/estado', { headers: { 'Accept': 'application/json' } }); if (!response.ok) return; const data = await response.json(); updateCashView(data.caja); renderPendingOrders(data.pending_orders); } catch (error) {} }
 
 async function searchProducts() {
   const q = $('#saleSearch').value.trim();
-  const response = await fetch(`/ventas/api/productos?q=${encodeURIComponent(q)}`);
+  const response = await fetch(`/ventas/api/productos?q=${encodeURIComponent(q)}`, { cache: 'no-store' });
   const products = await response.json();
   const results = $('#saleResults');
   results.innerHTML = products.map(product => {
     const vendible = isVendible(product);
     const minPrice = product.precio_minimo_venta !== null && product.precio_minimo_venta !== undefined ? saleMoney(product.precio_minimo_venta) : 'Sin precio mínimo';
+    const optional = optionalPriceLine({ precio_cuarta: product.precio_cuarta, precio_media: product.precio_media, precio_docena: product.precio_docena, precio_caja: product.precio_caja });
     const presentation = product.presentacion || 'Unidad';
-    return `<article class="product-card"><div class="product-card__top"><div><h3>${esc(product.nombre)}</h3><span class="code">${esc(presentation)}</span></div><span class="price">${vendible ? saleMoney(product.precio_venta_estandar) : 'Sin precio'}</span></div><small>${esc(product.descripcion || '')}</small><span class="stock">Precio mínimo: ${minPrice}</span>${vendible ? `<button class="btn btn--ghost" type="button" data-add-product='${JSON.stringify(product).replaceAll("'", "&apos;")}'>Añadir</button>` : '<button class="btn btn--ghost" type="button" disabled>Falta precio</button>'}</article>`;
+    return `<article class="product-card"><div class="product-card__top"><div><h3>${esc(product.nombre)}</h3><span class="code">${esc(presentation)}</span></div><span class="price">${vendible ? saleMoney(product.precio_venta_estandar) : 'Sin precio'}</span></div><small>${esc(product.descripcion || '')}</small><span class="stock">Precio mínimo: ${minPrice}</span>${optional}${vendible ? `<button class="btn btn--ghost" type="button" data-add-product='${JSON.stringify(product).replaceAll("'", "&apos;")}'>Añadir</button>` : '<button class="btn btn--ghost" type="button" disabled>Falta precio</button>'}</article>`;
   }).join('') || '<p class="empty">No se encontraron productos.</p>';
 }
 
+function toggleShippingFields() {
+  const isShipping = document.querySelector('[name="tipo_entrega"]:checked')?.value === 'ENVIO';
+  const box = $('#shippingFields');
+  if (box) box.hidden = !isShipping;
+}
+function clientPayload() {
+  return {
+    nombre: ($('#clientName')?.value || '').trim(),
+    celular: ($('#clientPhone')?.value || '').trim(),
+    carnet: ($('#clientDocument')?.value || '').trim(),
+    tipo_entrega: document.querySelector('[name="tipo_entrega"]:checked')?.value || 'TIENDA',
+    ciudad_destino: ($('#clientCity')?.value || '').trim(),
+    detalle_envio: ($('#shippingDetail')?.value || '').trim(),
+  };
+}
 function openCheckout() {
-  if (!cashIsOpen()) {
-    alert('Debes abrir caja antes de confirmar ventas.');
-    document.querySelector('#cashOpenModal')?.classList.add('is-open');
-    return;
-  }
-  if (!saleState.cart.length) {
-    alert('Añade productos antes de confirmar.');
-    return;
-  }
+  if (!cashIsOpen()) { alert('Debes abrir caja antes de confirmar ventas.'); document.querySelector('#cashOpenModal')?.classList.add('is-open'); return; }
+  if (!saleState.cart.length) return alert('Añade productos antes de confirmar.');
   saleState.idempotencyKey = newIdempotencyKey();
   const preview = $('#checkoutPreview');
-  preview.innerHTML = saleState.cart.map(item => `<div class="checkout-row"><span>${item.cantidad} × ${esc(item.nombre)} (${esc(item.presentacion)})</span><span>${saleMoney(item.precio_unitario * item.cantidad)}</span></div>`).join('') + `<div class="checkout-row"><span>Total</span><span>${saleMoney(totals().total)}</span></div>`;
-  $('#saleResult').hidden = true;
-  $('#confirmSaleBtn').disabled = false;
-  $('#confirmSaleBtn').textContent = 'Confirmar pago';
-  updateSellerChips();
-  $('#checkoutModal').classList.add('is-open');
+  preview.innerHTML = saleState.cart.map(item => `<div class="checkout-row"><span>${item.cantidad} × ${esc(item.nombre)} (${esc(item.presentacion)})${item.es_yapa ? ' · YAPA' : ''}</span><span>${saleMoney(itemTotal(item))}</span></div>`).join('') + `<div class="checkout-row"><span>Total</span><span>${saleMoney(totals().total)}</span></div>`;
+  $('#saleResult').hidden = true; $('#confirmSaleBtn').disabled = false; $('#confirmSaleBtn').textContent = 'Confirmar pago'; updateSellerChips(); toggleShippingFields(); $('#checkoutModal').classList.add('is-open');
 }
-
-function payloadItems() {
-  return saleState.cart.map(item => ({ producto_id: item.producto_id, presentacion_id: item.presentacion_id, cantidad: item.cantidad, precio_unitario: item.precio_unitario }));
-}
-
+function payloadItems() { return saleState.cart.map(item => ({ producto_id: item.producto_id, presentacion_id: item.presentacion_id, cantidad: item.cantidad, precio_unitario: item.precio_unitario, es_yapa: item.es_yapa })); }
 async function sendToCashier() {
-  if (!saleState.cart.length) {
-    alert('Añade productos antes de enviar a caja.');
-    return;
-  }
-  const button = $('#sendCashierBtn');
-  button.disabled = true;
-  try {
-    const response = await fetch('/ventas/ordenes/enviar-caja', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: payloadItems() }) });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'No se pudo enviar a caja.');
-    saleState.cart = [];
-    saleState.orderId = null;
-    renderCart();
-    alert(`Pedido enviado a caja. Orden #${data.order_id}`);
-  } catch (error) {
-    alert(error.message);
-  } finally {
-    button.disabled = false;
-  }
+  if (!saleState.cart.length) return alert('Añade productos antes de enviar a caja.');
+  const button = $('#sendCashierBtn'); button.disabled = true;
+  try { const response = await fetch('/ventas/ordenes/enviar-caja', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: payloadItems() }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'No se pudo enviar a caja.'); saleState.cart = []; saleState.orderId = null; renderCart(); alert(`Pedido enviado a caja. Orden #${data.order_id}`); } catch (error) { alert(error.message); } finally { button.disabled = false; }
 }
-
 async function confirmSale() {
-  if (!cashIsOpen()) {
-    alert('Debes abrir caja antes de confirmar ventas.');
-    return;
-  }
-  if (!saleState.paymentMethod) {
-    alert('Selecciona un método de pago.');
-    return;
-  }
-  const button = $('#confirmSaleBtn');
-  button.disabled = true;
-  button.textContent = 'Procesando...';
+  if (!cashIsOpen()) return alert('Debes abrir caja antes de confirmar ventas.');
+  if (!saleState.paymentMethod) return alert('Selecciona un método de pago.');
+  const button = $('#confirmSaleBtn'); button.disabled = true; button.textContent = 'Procesando...';
   try {
-    const response = await fetch('/ventas/confirmar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        items: saleState.orderId ? [] : payloadItems(),
-        orden_id: saleState.orderId,
-        metodo_pago: saleState.paymentMethod,
-        idempotency_key: saleState.idempotencyKey,
-        vendedor_id: saleState.selectedSellerId || null,
-      }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'No se pudo confirmar la venta.');
+    const response = await fetch('/ventas/confirmar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: saleState.orderId ? [] : payloadItems(), orden_id: saleState.orderId, metodo_pago: saleState.paymentMethod, idempotency_key: saleState.idempotencyKey, vendedor_id: saleState.selectedSellerId || null, cliente: clientPayload() }) });
+    const data = await response.json(); if (!response.ok) throw new Error(data.error || 'No se pudo confirmar la venta.');
     const comprobante = data.numero_comprobante ? `Comprobante ${String(data.numero_comprobante).padStart(6, '0')}` : data.numero_venta;
     const receiptUrl = `/ventas/${data.venta_id}/comprobante`;
-    $('#saleResult').hidden = false;
-    $('#saleResult').innerHTML = `Venta confirmada: <span>${esc(comprobante)}</span> por ${saleMoney(data.total)}.<br><a href="${receiptUrl}" target="_blank">Imprimir comprobante</a> · <a href="/ventas/${data.venta_id}/comprobante-pdf" target="_blank">Abrir PDF</a>`;
-    updateCashView(data.caja);
-    renderPendingOrders(data.pending_orders);
-    button.textContent = 'Venta confirmada';
-    button.disabled = true;
-    saleState.cart = [];
-    saleState.orderId = null;
-    resetSellerToDefault();
-    renderCart();
-    searchProducts();
-  } catch (error) {
-    alert(error.message);
-    button.disabled = false;
-    button.textContent = 'Confirmar pago';
-  }
+    $('#saleResult').hidden = false; $('#saleResult').innerHTML = `Venta confirmada: <span>${esc(comprobante)}</span> por ${saleMoney(data.total)}.<br><a href="${receiptUrl}" target="_blank">Imprimir comprobante</a> · <a href="/ventas/${data.venta_id}/comprobante-pdf" target="_blank">Abrir PDF</a>`;
+    updateCashView(data.caja); renderPendingOrders(data.pending_orders); button.textContent = 'Venta confirmada'; button.disabled = true; saleState.cart = []; saleState.orderId = null; resetSellerToDefault(); renderCart(); searchProducts();
+  } catch (error) { alert(error.message); button.disabled = false; button.textContent = 'Confirmar pago'; }
 }
-
 async function loadOrder(orderId) {
-  const response = await fetch(`/ventas/api/ordenes/${orderId}`);
-  const order = await response.json();
-  if (!response.ok) {
-    alert(order.error || 'No se pudo cargar la orden.');
-    refreshSalesState();
-    return;
-  }
-  saleState.orderId = order.id;
-  setSeller(order.vendedor_id || '', order.vendedor_nombre || order.vendedor_username || 'Sin vendedor');
-  saleState.cart = order.detalles.map(item => ({
-    producto_id: item.producto_id,
-    presentacion_id: item.producto_presentacion_id,
-    nombre: item.nombre,
-    codigo_producto: item.codigo_producto,
-    presentacion: item.presentacion,
-    cantidad: parseInt(item.cantidad || 1, 10),
-    precio_estandar: Number(item.precio_estandar),
-    precio_minimo: Number(item.precio_minimo_venta),
-    precio_unitario: Number(item.precio_unitario),
-    stock_total: 0,
-    stock_local: 0,
-  }));
-  renderCart();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  const response = await fetch(`/ventas/api/ordenes/${orderId}`, { cache: 'no-store' }); const order = await response.json();
+  if (!response.ok) { alert(order.error || 'No se pudo cargar la orden.'); refreshSalesState(); return; }
+  saleState.orderId = order.id; setSeller(order.vendedor_id || '', order.vendedor_nombre || order.vendedor_username || 'Sin vendedor');
+  saleState.cart = order.detalles.map(item => ({ producto_id: item.producto_id, presentacion_id: item.producto_presentacion_id, nombre: item.nombre, presentacion: item.presentacion, cantidad: parseInt(item.cantidad || 1, 10), precio_estandar: Number(item.precio_estandar), precio_minimo: Number(item.precio_minimo_venta), precio_unitario: Number(item.precio_unitario), es_yapa: Number(item.es_yapa || 0) === 1 }));
+  renderCart(); window.scrollTo({ top: 0, behavior: 'smooth' });
 }
-
-function bindPendingOrderClicks() {
-  $('#pendingOrdersList')?.addEventListener('click', event => {
-    const button = event.target.closest('[data-load-order]');
-    if (!button) return;
-    loadOrder(button.dataset.loadOrder);
-  });
-}
+function bindPendingOrderClicks() { $('#pendingOrdersList')?.addEventListener('click', event => { const button = event.target.closest('[data-load-order]'); if (!button) return; loadOrder(button.dataset.loadOrder); }); }
 
 document.addEventListener('DOMContentLoaded', () => {
-  initSeller();
-  renderCart();
-  searchProducts();
-  refreshSalesState();
+  cleanSellerMobileNav(); initSeller(); renderCart(); searchProducts(); refreshSalesState(); toggleShippingFields();
   $('#saleSearch')?.addEventListener('input', debounce(searchProducts, 220));
-  document.querySelector('#sellerChipBox')?.addEventListener('click', event => {
-    const chip = event.target.closest('[data-seller-chip]');
-    if (!chip) return;
-    toggleSeller(chip.dataset.sellerChip || '', chip.dataset.sellerName || 'Sin vendedor');
-  });
-  $('#saleResults')?.addEventListener('click', event => {
-    const button = event.target.closest('[data-add-product]');
-    if (!button) return;
-    addToCart(JSON.parse(button.dataset.addProduct));
-  });
-  $('#cartItems')?.addEventListener('input', event => {
-    const qtyIndex = event.target.dataset.cartQty;
-    const priceIndex = event.target.dataset.cartPrice;
-    if (qtyIndex !== undefined) {
-      saleState.cart[qtyIndex].cantidad = Math.max(parseInt(event.target.value || 1, 10), 1);
-      event.target.value = saleState.cart[qtyIndex].cantidad;
-    }
-    if (priceIndex !== undefined) {
-      const item = saleState.cart[priceIndex];
-      const price = Number(event.target.value || item.precio_estandar);
-      item.precio_unitario = Math.min(Math.max(price, item.precio_minimo), item.precio_estandar);
-      event.target.value = item.precio_unitario;
-    }
-    saleState.orderId = null;
-    renderCart();
-  });
-  $('#cartItems')?.addEventListener('click', event => {
-    const minus = event.target.closest('[data-qty-minus]');
-    const plus = event.target.closest('[data-qty-plus]');
-    const remove = event.target.closest('[data-remove-item]');
-    if (minus) {
-      const index = Number(minus.dataset.qtyMinus);
-      saleState.cart[index].cantidad = Math.max(1, (saleState.cart[index].cantidad || 1) - 1);
-      saleState.orderId = null;
-      renderCart();
-      return;
-    }
-    if (plus) {
-      const index = Number(plus.dataset.qtyPlus);
-      saleState.cart[index].cantidad = (saleState.cart[index].cantidad || 1) + 1;
-      saleState.orderId = null;
-      renderCart();
-      return;
-    }
-    if (remove) {
-      saleState.cart.splice(Number(remove.dataset.removeItem), 1);
-      saleState.orderId = null;
-      renderCart();
-    }
-  });
-  $('#clearCartBtn')?.addEventListener('click', () => {
-    saleState.cart = [];
-    saleState.orderId = null;
-    resetSellerToDefault();
-    renderCart();
-  });
-  $('#checkoutBtn')?.addEventListener('click', openCheckout);
-  $('#sendCashierBtn')?.addEventListener('click', sendToCashier);
-  $('#confirmSaleBtn')?.addEventListener('click', confirmSale);
-  $('#openCashModalBtn')?.addEventListener('click', () => document.querySelector('#cashOpenModal')?.classList.add('is-open'));
-  $('#openCloseCashModal')?.addEventListener('click', () => document.querySelector('#cashCloseModal')?.classList.add('is-open'));
+  document.querySelector('#sellerChipBox')?.addEventListener('click', event => { const chip = event.target.closest('[data-seller-chip]'); if (!chip) return; toggleSeller(chip.dataset.sellerChip || '', chip.dataset.sellerName || 'Sin vendedor'); });
+  $('#saleResults')?.addEventListener('click', event => { const button = event.target.closest('[data-add-product]'); if (!button) return; addToCart(JSON.parse(button.dataset.addProduct)); });
+  $('#cartItems')?.addEventListener('input', event => { const qtyIndex = event.target.dataset.cartQty; const priceIndex = event.target.dataset.cartPrice; if (qtyIndex !== undefined) { saleState.cart[qtyIndex].cantidad = Math.max(parseInt(event.target.value || 1, 10), 1); event.target.value = saleState.cart[qtyIndex].cantidad; } if (priceIndex !== undefined) { const item = saleState.cart[priceIndex]; if (!item.es_yapa) { const price = Number(event.target.value || item.precio_estandar); item.precio_unitario = Math.min(Math.max(price, item.precio_minimo), item.precio_estandar); event.target.value = item.precio_unitario; } } saleState.orderId = null; renderCart(); });
+  $('#cartItems')?.addEventListener('click', event => { const minus = event.target.closest('[data-qty-minus]'); const plus = event.target.closest('[data-qty-plus]'); const remove = event.target.closest('[data-remove-item]'); const yapa = event.target.closest('[data-yapa-toggle]'); if (minus) { const index = Number(minus.dataset.qtyMinus); saleState.cart[index].cantidad = Math.max(1, (saleState.cart[index].cantidad || 1) - 1); saleState.orderId = null; renderCart(); return; } if (plus) { const index = Number(plus.dataset.qtyPlus); saleState.cart[index].cantidad = (saleState.cart[index].cantidad || 1) + 1; saleState.orderId = null; renderCart(); return; } if (remove) { saleState.cart.splice(Number(remove.dataset.removeItem), 1); saleState.orderId = null; renderCart(); return; } if (yapa) { const index = Number(yapa.dataset.yapaToggle); saleState.cart[index].es_yapa = yapa.checked; if (yapa.checked) saleState.cart[index].precio_unitario = 0; else saleState.cart[index].precio_unitario = saleState.cart[index].precio_estandar; saleState.orderId = null; renderCart(); } });
+  $('#clearCartBtn')?.addEventListener('click', () => { saleState.cart = []; saleState.orderId = null; resetSellerToDefault(); renderCart(); });
+  $('#checkoutBtn')?.addEventListener('click', openCheckout); $('#sendCashierBtn')?.addEventListener('click', sendToCashier); $('#confirmSaleBtn')?.addEventListener('click', confirmSale);
+  $('#openCashModalBtn')?.addEventListener('click', () => document.querySelector('#cashOpenModal')?.classList.add('is-open')); $('#openCloseCashModal')?.addEventListener('click', () => document.querySelector('#cashCloseModal')?.classList.add('is-open'));
   document.querySelector('[data-choice-group="payment"]')?.addEventListener('choice:change', event => { saleState.paymentMethod = event.detail.value; });
-  bindPendingOrderClicks();
-  if (currentLayout()?.dataset.canConfirm === '1') setInterval(refreshSalesState, 12000);
+  document.querySelectorAll('[name="tipo_entrega"]').forEach(input => input.addEventListener('change', toggleShippingFields));
+  bindPendingOrderClicks(); if (currentLayout()?.dataset.canConfirm === '1') setInterval(refreshSalesState, 12000);
 });
