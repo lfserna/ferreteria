@@ -6,16 +6,19 @@ from mysql.connector.errors import IntegrityError
 from app.database import db_cursor, db_transaction
 from app.services.audit_service import log_audit
 from app.services.category_admin_service import estado_value
+from app.services.price_schema_service import EXTRA_PRICE_FIELDS, ensure_extra_price_columns, extra_prices_from_data
 
 
 def list_products_admin(cliente_id: int, query: str = ""):
     search = f"%{query.strip()}%"
-    with db_cursor() as cursor:
+    with db_cursor(commit=True) as cursor:
+        ensure_extra_price_columns(cursor)
         cursor.execute(
             """
             SELECT p.id, p.nombre, p.descripcion, p.codigo_producto, p.codigo_barras,
                    p.precio_compra, p.contenido_por_caja, p.estado, c.nombre AS categoria,
                    m.nombre AS marca, pr.precio_venta_estandar, pr.precio_minimo_venta,
+                   pr.precio_cuarta, pr.precio_media, pr.precio_docena, pr.precio_caja,
                    COALESCE(stock.stock_total, 0) AS stock_total
             FROM productos p
             JOIN categorias_producto c ON c.id = p.categoria_id
@@ -40,10 +43,12 @@ def list_stock_locations(cliente_id: int):
 
 
 def get_product(cliente_id: int, product_id: int):
-    with db_cursor() as cursor:
+    with db_cursor(commit=True) as cursor:
+        ensure_extra_price_columns(cursor)
         cursor.execute(
             """
-            SELECT p.*, pp.id AS presentacion_id, pr.precio_venta_estandar, pr.precio_minimo_venta
+            SELECT p.*, pp.id AS presentacion_id, pr.precio_venta_estandar, pr.precio_minimo_venta,
+                   pr.precio_cuarta, pr.precio_media, pr.precio_docena, pr.precio_caja
             FROM productos p
             LEFT JOIN producto_presentaciones pp ON pp.producto_id=p.id AND pp.tipo_presentacion='UNIDAD'
             LEFT JOIN producto_precios pr ON pr.id=(SELECT pr2.id FROM producto_precios pr2 WHERE pr2.producto_presentacion_id=pp.id ORDER BY pr2.id DESC LIMIT 1)
@@ -151,6 +156,10 @@ def validate_individual_codes_available(cliente_id, codes):
         raise ValueError(f"Código individual repetido: {conflict['codigo']} ya está registrado{product_text}. No se guardó el producto.")
 
 
+def has_any_price(data):
+    return any(data.get(field) not in (None, "") for field in ["precio_venta_estandar", "precio_minimo_venta", *EXTRA_PRICE_FIELDS.keys()])
+
+
 def create_product(cliente_id: int, user_id: int, data: dict):
     nombre = (data.get("nombre") or "").strip()
     codigo = (data.get("codigo_producto") or "").strip() or None
@@ -182,8 +191,8 @@ def create_product(cliente_id: int, user_id: int, data: dict):
         if fallback_used:
             skipped_general_codes.append({"campo": "codigo_producto/codigo_barras", "codigo": "generado_automaticamente"})
 
-        if data.get("precio_venta_estandar") and data.get("precio_minimo_venta"):
-            upsert_unit_price(cursor, cliente_id, product_id, data["precio_venta_estandar"], data["precio_minimo_venta"])
+        if has_any_price(data):
+            upsert_unit_price(cursor, cliente_id, product_id, data.get("precio_venta_estandar"), data.get("precio_minimo_venta"), extra_prices_from_data(data))
         if initial_qty:
             add_initial_stock(cursor, cliente_id, product_id, location_id, initial_qty, user_id)
         if codes:
@@ -191,34 +200,9 @@ def create_product(cliente_id: int, user_id: int, data: dict):
             registered_codes = result["registered"]
             skipped_codes = result["skipped"]
 
-        log_audit(
-            cursor,
-            cliente_id=cliente_id,
-            usuario_id=user_id,
-            modulo="CATALOGO",
-            accion="CREAR_PRODUCTO",
-            tabla_afectada="productos",
-            registro_id=product_id,
-            valor_nuevo={
-                "nombre": nombre,
-                "codigo": codigo,
-                "codigo_barras": codigo_barras,
-                "codigos_generales_omitidos": skipped_general_codes,
-                "cantidad_inicial": initial_qty,
-                "codigos_recibidos": len(codes),
-                "codigos_registrados": registered_codes,
-                "codigos_omitidos": skipped_codes,
-                "tipo_codigo": tipo_codigo,
-            },
-        )
+        log_audit(cursor, cliente_id=cliente_id, usuario_id=user_id, modulo="CATALOGO", accion="CREAR_PRODUCTO", tabla_afectada="productos", registro_id=product_id, valor_nuevo={"nombre": nombre, "codigo": codigo, "codigo_barras": codigo_barras, "codigos_generales_omitidos": skipped_general_codes, "cantidad_inicial": initial_qty, "codigos_recibidos": len(codes), "codigos_registrados": registered_codes, "codigos_omitidos": skipped_codes, "tipo_codigo": tipo_codigo})
 
-    return {
-        "product_id": product_id,
-        "codes_received": len(codes),
-        "codes_registered": registered_codes,
-        "codes_skipped": skipped_codes,
-        "general_codes_skipped": skipped_general_codes,
-    }
+    return {"product_id": product_id, "codes_received": len(codes), "codes_registered": registered_codes, "codes_skipped": skipped_codes, "general_codes_skipped": skipped_general_codes}
 
 
 def insert_product_row(cursor, cliente_id, categoria_id, data, nombre, codigo, codigo_barras, producto_activo):
@@ -229,22 +213,14 @@ def insert_product_row(cursor, cliente_id, categoria_id, data, nombre, codigo, c
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'UNIDAD',%s,1,%s,NOW(),NOW())
     """
     try:
-        cursor.execute(
-            sql,
-            (cliente_id, categoria_id, data.get("marca_id") or None, nombre, data.get("descripcion") or None,
-             codigo, codigo_barras, data.get("precio_compra") or None, data.get("contenido_por_caja") or None, producto_activo),
-        )
+        cursor.execute(sql, (cliente_id, categoria_id, data.get("marca_id") or None, nombre, data.get("descripcion") or None, codigo, codigo_barras, data.get("precio_compra") or None, data.get("contenido_por_caja") or None, producto_activo))
         return cursor.lastrowid, False
     except IntegrityError as error:
         lowered = str(error).lower()
         if "codigo_producto" in lowered or "codigo_barras" in lowered or "cannot be null" in lowered:
             auto_codigo = make_auto_code(cliente_id, "AUTO")
             auto_barras = make_auto_code(cliente_id, "AUTOBAR")
-            cursor.execute(
-                sql,
-                (cliente_id, categoria_id, data.get("marca_id") or None, nombre, data.get("descripcion") or None,
-                 auto_codigo, auto_barras, data.get("precio_compra") or None, data.get("contenido_por_caja") or None, producto_activo),
-            )
+            cursor.execute(sql, (cliente_id, categoria_id, data.get("marca_id") or None, nombre, data.get("descripcion") or None, auto_codigo, auto_barras, data.get("precio_compra") or None, data.get("contenido_por_caja") or None, producto_activo))
             return cursor.lastrowid, True
         raise
 
@@ -274,11 +250,10 @@ def update_product(cliente_id: int, user_id: int, product_id: int, data: dict):
                 codigo_barras=%s, precio_compra=%s, contenido_por_caja=%s, estado=%s, updated_at=NOW()
             WHERE id=%s
             """,
-            (categoria_id, data.get("marca_id") or None, nombre, data.get("descripcion") or None, codigo,
-             codigo_barras, data.get("precio_compra") or None, data.get("contenido_por_caja") or None, estado, product_id),
+            (categoria_id, data.get("marca_id") or None, nombre, data.get("descripcion") or None, codigo, codigo_barras, data.get("precio_compra") or None, data.get("contenido_por_caja") or None, estado, product_id),
         )
-        if data.get("precio_venta_estandar") and data.get("precio_minimo_venta"):
-            upsert_unit_price(cursor, cliente_id, product_id, data["precio_venta_estandar"], data["precio_minimo_venta"])
+        if has_any_price(data):
+            upsert_unit_price(cursor, cliente_id, product_id, data.get("precio_venta_estandar"), data.get("precio_minimo_venta"), extra_prices_from_data(data))
 
         registered_codes = 0
         skipped_codes = []
@@ -333,19 +308,13 @@ def insert_product_codes(cursor, cliente_id, product_id, location_id, codes, tip
     estado = estado_value(cursor, "producto_codigos", "DISPONIBLE")
     registered = 0
     skipped = []
-
     for code in codes:
         normalized = normalize_barcode(code)
         aliases = sorted(barcode_aliases(normalized))
         placeholders = ",".join(["%s"] * len(aliases))
-        cursor.execute(
-            f"SELECT codigo FROM producto_codigos WHERE cliente_id=%s AND codigo IN ({placeholders}) LIMIT 1",
-            tuple([cliente_id] + aliases),
-        )
-        existing = cursor.fetchone()
-        if existing:
+        cursor.execute(f"SELECT codigo FROM producto_codigos WHERE cliente_id=%s AND codigo IN ({placeholders}) LIMIT 1", tuple([cliente_id] + aliases))
+        if cursor.fetchone():
             raise ValueError(f"Código individual repetido: {normalized} ya está registrado. No se guardó el producto.")
-
         try:
             cursor.execute(
                 """
@@ -358,13 +327,16 @@ def insert_product_codes(cursor, cliente_id, product_id, location_id, codes, tip
             registered += 1
         except IntegrityError:
             raise ValueError(f"Código individual repetido: {normalized} ya está registrado. No se guardó el producto.")
-
     return {"registered": registered, "skipped": skipped}
 
 
-def upsert_unit_price(cursor, cliente_id: int, product_id: int, precio_venta, precio_minimo):
+def upsert_unit_price(cursor, cliente_id: int, product_id: int, precio_venta, precio_minimo, extras=None):
+    if precio_venta in (None, "") or precio_minimo in (None, ""):
+        raise ValueError("Para configurar precios debes indicar precio unitario de venta y precio mínimo.")
     if float(precio_minimo) > float(precio_venta):
-        raise ValueError("El precio mínimo no puede ser mayor al precio estándar.")
+        raise ValueError("El precio mínimo no puede ser mayor al precio unitario de venta.")
+    extras = extras or {}
+    ensure_extra_price_columns(cursor)
     presentacion_activa = estado_value(cursor, "producto_presentaciones", "ACTIVO")
     precio_activo = estado_value(cursor, "producto_precios", "ACTIVO")
     precio_inactivo = estado_value(cursor, "producto_precios", "INACTIVO")
@@ -377,4 +349,12 @@ def upsert_unit_price(cursor, cliente_id: int, product_id: int, precio_venta, pr
         cursor.execute("INSERT INTO producto_presentaciones (cliente_id, producto_id, tipo_presentacion, nombre, factor_unidad_base, estado, created_at, updated_at) VALUES (%s,%s,'UNIDAD','Unidad',1,%s,NOW(),NOW())", (cliente_id, product_id, presentacion_activa))
         presentation_id = cursor.lastrowid
     cursor.execute("UPDATE producto_precios SET estado=%s, updated_at=NOW() WHERE cliente_id=%s AND producto_presentacion_id=%s", (precio_inactivo, cliente_id, presentation_id))
-    cursor.execute("INSERT INTO producto_precios (cliente_id, producto_id, producto_presentacion_id, precio_venta_estandar, precio_minimo_venta, moneda, vigente_desde, estado, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,'BOB',NOW(),%s,NOW(),NOW())", (cliente_id, product_id, presentation_id, precio_venta, precio_minimo, precio_activo))
+    cursor.execute(
+        """
+        INSERT INTO producto_precios
+            (cliente_id, producto_id, producto_presentacion_id, precio_venta_estandar, precio_minimo_venta,
+             precio_cuarta, precio_media, precio_docena, precio_caja, moneda, vigente_desde, estado, created_at, updated_at)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'BOB',NOW(),%s,NOW(),NOW())
+        """,
+        (cliente_id, product_id, presentation_id, precio_venta, precio_minimo, extras.get("precio_cuarta"), extras.get("precio_media"), extras.get("precio_docena"), extras.get("precio_caja"), precio_activo),
+    )
