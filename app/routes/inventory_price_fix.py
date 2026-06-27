@@ -10,6 +10,10 @@ from app.utils.serializers import to_jsonable
 PRICE_MANAGERS = {"ADMIN_GENERAL_NEGOCIO", "ADMIN_TIENDA"}
 
 
+def wants_json():
+    return request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.accept_mimetypes.best == "application/json"
+
+
 @login_required
 def detalle_producto_fixed(product_id):
     with db_cursor(commit=True) as c:
@@ -60,7 +64,10 @@ def detalle_producto_fixed(product_id):
 @login_required
 def presentacion_precio_fixed():
     if not g.user or g.user.get("rol_codigo") not in PRICE_MANAGERS:
-        flash("No tienes permisos para editar precios.", "danger")
+        message = "No tienes permisos para editar precios."
+        if wants_json():
+            return jsonify({"ok": False, "message": message}), 403
+        flash(message, "danger")
         return redirect(url_for("inventory.index"))
     try:
         product_id = int(request.form.get("producto_id") or 0)
@@ -100,7 +107,11 @@ def presentacion_precio_fixed():
                 (g.user["cliente_id"], product_id, presentation_id, precio, minimo, extras.get("precio_cuarta"), extras.get("precio_media"), extras.get("precio_docena"), extras.get("precio_caja"), precio_activo),
             )
             log_audit(c, cliente_id=g.user["cliente_id"], usuario_id=g.user["id"], modulo="CATALOGO", accion="EDITAR_PRESENTACION_PRECIO", tabla_afectada="producto_precios", registro_id=presentation_id, valor_anterior=previous_presentation, valor_nuevo={"producto_id": product_id, "presentacion": presentacion, "precio": precio, "minimo": minimo, **extras})
+        if wants_json():
+            return jsonify({"ok": True, "message": "Precios actualizados correctamente.", "product_id": product_id})
         flash("Presentación y precios actualizados correctamente.", "success")
     except ValueError as e:
+        if wants_json():
+            return jsonify({"ok": False, "message": str(e)}), 400
         flash(str(e), "danger")
     return redirect(url_for("inventory.index"))
