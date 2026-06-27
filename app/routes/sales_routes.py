@@ -7,11 +7,11 @@ from app.database import db_cursor
 from app.services.cash_service import cash_summary, close_cash_session, open_cash_session, require_open_cash
 from app.services.context_service import get_primary_stock_location
 from app.services.product_service import search_products
+from app.services.receipt_service import get_sale_receipt
 from app.services.sales_service import (
     confirm_sale_from_cart,
     create_order_from_cart,
     get_order,
-    get_sale_receipt,
     list_available_sellers,
     list_pending_orders,
 )
@@ -62,8 +62,7 @@ def abrir_caja():
     if not can_confirm_sales(): flash("Tu rol no requiere apertura de caja.", "danger"); return redirect(url_for("sales.index"))
     ubicacion_stock_id = current_stock_location()
     if not ubicacion_stock_id: flash("El usuario no tiene una ubicación de stock configurada.", "danger"); return redirect(url_for("sales.index"))
-    try:
-        open_cash_session(g.user["cliente_id"], g.user["id"], ubicacion_stock_id, request.form.get("monto_inicial_efectivo"), request.form.get("monto_inicial_qr"), request.form.get("observacion")); flash("Caja abierta correctamente. Ya puedes realizar ventas.", "success")
+    try: open_cash_session(g.user["cliente_id"], g.user["id"], ubicacion_stock_id, request.form.get("monto_inicial_efectivo"), request.form.get("monto_inicial_qr"), request.form.get("observacion")); flash("Caja abierta correctamente. Ya puedes realizar ventas.", "success")
     except ValueError as exc: flash(str(exc), "danger")
     return redirect(url_for("sales.index"))
 
@@ -72,8 +71,7 @@ def abrir_caja():
 @login_required
 def cerrar_caja():
     if not can_confirm_sales(): flash("Tu rol no puede cerrar caja.", "danger"); return redirect(url_for("sales.index"))
-    try:
-        close_cash_session(g.user["cliente_id"], g.user["id"], current_stock_location(), request.form.get("monto_final_efectivo"), request.form.get("monto_final_qr"), request.form.get("observacion")); flash("Caja cerrada correctamente.", "success")
+    try: close_cash_session(g.user["cliente_id"], g.user["id"], current_stock_location(), request.form.get("monto_final_efectivo"), request.form.get("monto_final_qr"), request.form.get("observacion")); flash("Caja cerrada correctamente.", "success")
     except ValueError as exc: flash(str(exc), "danger")
     return redirect(url_for("sales.index"))
 
@@ -137,8 +135,7 @@ def buscar_comprobante():
     if not digits: flash("El número de comprobante debe contener dígitos.", "warning"); return redirect(url_for("dashboard.index"))
     receipt_number = int(digits); params = [g.user["cliente_id"], receipt_number, raw_number, digits]; filters = ["cliente_id=%s", "(numero_comprobante=%s OR numero_venta=%s OR numero_venta=%s)"]
     if g.user.get("rol_codigo") == "ADMIN_TIENDA": filters.append("sucursal_id=%s"); params.append(g.user.get("sucursal_id"))
-    with db_cursor() as cursor:
-        cursor.execute(f"SELECT id FROM ventas WHERE {' AND '.join(filters)} ORDER BY fecha_venta DESC, id DESC LIMIT 1", tuple(params)); row = cursor.fetchone()
+    with db_cursor() as cursor: cursor.execute(f"SELECT id FROM ventas WHERE {' AND '.join(filters)} ORDER BY fecha_venta DESC, id DESC LIMIT 1", tuple(params)); row = cursor.fetchone()
     if not row: flash(f"No se encontró el comprobante {raw_number} dentro de tu alcance.", "warning"); return redirect(url_for("dashboard.index"))
     return redirect(url_for("sales.comprobante", venta_id=row["id"]))
 
