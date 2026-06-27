@@ -4,134 +4,20 @@
 <section class="page-heading page-heading--compact"><div><p class="eyebrow">Venta rápida</p><h1>{% if can_confirm %}Punto de venta{% else %}Armar pedido{% endif %}</h1></div></section>
 
 {% if requiere_caja %}
-<section class="panel pending-orders">
-    <div class="cart-heading">
-        <div>
-            <h2>{% if caja_abierta %}Caja abierta{% else %}Caja cerrada{% endif %}</h2>
-            {% if caja_abierta %}
-            <small>Inicio efectivo: <span id="cashQuickInitialCash">Bs {{ '%.2f'|format(caja.session.monto_inicial_efectivo) }}</span> · Inicio QR: <span id="cashQuickInitialQr">Bs {{ '%.2f'|format(caja.session.monto_inicial_qr) }}</span></small>
-            <small>Esperado efectivo: <span id="cashQuickExpectedCash">Bs {{ '%.2f'|format(caja.esperado_efectivo) }}</span> · Esperado QR: <span id="cashQuickExpectedQr">Bs {{ '%.2f'|format(caja.esperado_qr) }}</span></small>
-            {% else %}
-            <small>Debes abrir caja antes de confirmar ventas.</small>
-            {% endif %}
-        </div>
-        {% if caja_abierta %}<button class="btn btn--ghost" type="button" id="openCloseCashModal">Cerrar caja</button>{% else %}<button class="btn btn--primary" type="button" id="openCashModalBtn">Abrir caja</button>{% endif %}
-    </div>
-</section>
+<section class="panel pending-orders"><div class="cart-heading"><div><h2>{% if caja_abierta %}Caja abierta{% else %}Caja cerrada{% endif %}</h2>{% if caja_abierta %}<small>Inicio efectivo: <span id="cashQuickInitialCash">Bs {{ '%.2f'|format(caja.session.monto_inicial_efectivo) }}</span> · Inicio QR: <span id="cashQuickInitialQr">Bs {{ '%.2f'|format(caja.session.monto_inicial_qr) }}</span></small><small>Esperado efectivo: <span id="cashQuickExpectedCash">Bs {{ '%.2f'|format(caja.esperado_efectivo) }}</span> · Esperado QR: <span id="cashQuickExpectedQr">Bs {{ '%.2f'|format(caja.esperado_qr) }}</span></small>{% else %}<small>Debes abrir caja antes de confirmar ventas.</small>{% endif %}</div>{% if caja_abierta %}<button class="btn btn--ghost" type="button" id="openCloseCashModal">Cerrar caja</button>{% else %}<button class="btn btn--primary" type="button" id="openCashModalBtn">Abrir caja</button>{% endif %}</div></section>
 {% endif %}
 
-{% if can_confirm %}
-<section class="panel pending-orders" id="pendingOrdersPanel" {% if not pending_orders %}hidden{% endif %}>
-    <h2>Pedidos enviados a caja</h2>
-    <p class="muted">Puedes cargar uno de estos carritos o ignorarlos y crear una venta nueva.</p>
-    <div class="order-strip" id="pendingOrdersList">
-        {% for order in pending_orders %}
-        <article class="order-chip" data-pending-order="{{ order.id }}" style="text-align:left;min-width:260px;max-width:360px">
-            <strong>{{ order.codigo_orden }}</strong>
-            <small>{{ order.items }} items · {{ order.vendedor_nombre or 'Sin vendedor' }} · Bs {{ '%.2f'|format(order.total_estimado) }}</small>
-            <div style="margin-top:6px">
-                {% for item in order.detalles[:4] %}
-                <small style="display:block">{{ item.cantidad|int }} × {{ item.nombre }} · Bs {{ '%.2f'|format(item.precio_unitario) }}</small>
-                {% endfor %}
-                {% if order.detalles|length > 4 %}<small>+ {{ order.detalles|length - 4 }} productos más</small>{% endif %}
-            </div>
-            <button class="btn btn--ghost btn--block" type="button" data-load-order="{{ order.id }}" style="margin-top:8px">Cargar carrito</button>
-        </article>
-        {% endfor %}
-    </div>
-</section>
-{% endif %}
+{% if can_confirm %}<section class="panel pending-orders" id="pendingOrdersPanel" {% if not pending_orders %}hidden{% endif %}><h2>Pedidos enviados a caja</h2><p class="muted">Puedes cargar uno de estos carritos o ignorarlos y crear una venta nueva.</p><div class="order-strip" id="pendingOrdersList">{% for order in pending_orders %}<article class="order-chip" data-pending-order="{{ order.id }}" style="text-align:left;min-width:260px;max-width:360px"><strong>{{ order.codigo_orden }}</strong><small>{{ order.items }} items · {{ order.vendedor_nombre or 'Sin vendedor' }} · Bs {{ '%.2f'|format(order.total_estimado) }}</small><div style="margin-top:6px">{% for item in order.detalles[:4] %}<small style="display:block">{{ item.cantidad|int }} × {{ item.nombre }} · Bs {{ '%.2f'|format(item.precio_unitario) }}{% if item.es_yapa %} · YAPA{% endif %}</small>{% endfor %}{% if order.detalles|length > 4 %}<small>+ {{ order.detalles|length - 4 }} productos más</small>{% endif %}</div><button class="btn btn--ghost btn--block" type="button" data-load-order="{{ order.id }}" style="margin-top:8px">Cargar carrito</button></article>{% endfor %}</div></section>{% endif %}
 
-<section class="sale-layout" data-can-confirm="{{ '1' if can_confirm else '0' }}" data-can-send-order="{{ '1' if can_send_order else '0' }}" data-cash-open="{{ '1' if caja_abierta or not requiere_caja else '0' }}" data-current-seller-id="{{ seller_id }}" data-current-seller-name="{{ seller_name }}">
-    <div class="panel product-search-panel">
-        <label class="search-label">Buscar producto<input id="saleSearch" class="search-input" type="search" placeholder="Nombre, descripción, código o barras..." autocomplete="off"></label>
-        <div id="saleResults" class="product-results"></div>
-    </div>
-    <aside class="panel cart-panel">
-        <div class="cart-heading">
-            <div><h2>Carrito</h2><small id="cartSellerLabel">Vendedor: {{ seller_name }}{% if seller_id %} · ID {{ seller_id }}{% endif %}</small></div>
-            <button id="clearCartBtn" class="btn btn--ghost" type="button">Nuevo carrito</button>
-        </div>
-        <div id="cartItems" class="cart-items"></div>
-        <div class="cart-summary"><div><span>Subtotal estándar</span><strong id="cartSubtotal">Bs 0.00</strong></div><div><span>Descuento</span><strong id="cartDiscount">Bs 0.00</strong></div><div class="cart-total"><span>Total</span><strong id="cartTotal">Bs 0.00</strong></div></div>
-        <button id="checkoutBtn" class="btn btn--primary btn--block" type="button" {% if not can_confirm or (requiere_caja and not caja_abierta) %}disabled{% endif %} {% if not can_confirm %}hidden{% endif %}>Vista preliminar y pago</button>
-        <button id="sendCashierBtn" class="btn btn--secondary btn--block" type="button" {% if not can_send_order %}hidden{% endif %}>Enviar a caja</button>
-    </aside>
-</section>
+<section class="sale-layout" data-can-confirm="{{ '1' if can_confirm else '0' }}" data-can-send-order="{{ '1' if can_send_order else '0' }}" data-cash-open="{{ '1' if caja_abierta or not requiere_caja else '0' }}" data-current-seller-id="{{ seller_id }}" data-current-seller-name="{{ seller_name }}"><div class="panel product-search-panel"><label class="search-label">Buscar producto<input id="saleSearch" class="search-input" type="search" placeholder="Nombre, descripción, código o barras..." autocomplete="off"></label><div id="saleResults" class="product-results"></div></div><aside class="panel cart-panel"><div class="cart-heading"><div><h2>Carrito</h2><small id="cartSellerLabel">Vendedor: {{ seller_name }}{% if seller_id %} · ID {{ seller_id }}{% endif %}</small></div><button id="clearCartBtn" class="btn btn--ghost" type="button">Nuevo carrito</button></div><div id="cartItems" class="cart-items"></div><div class="cart-summary"><div><span>Subtotal estándar</span><strong id="cartSubtotal">Bs 0.00</strong></div><div><span>Descuento</span><strong id="cartDiscount">Bs 0.00</strong></div><div class="cart-total"><span>Total</span><strong id="cartTotal">Bs 0.00</strong></div></div><button id="checkoutBtn" class="btn btn--primary btn--block" type="button" {% if not can_confirm or (requiere_caja and not caja_abierta) %}disabled{% endif %} {% if not can_confirm %}hidden{% endif %}>Vista preliminar y pago</button><button id="sendCashierBtn" class="btn btn--secondary btn--block" type="button" {% if not can_send_order %}hidden{% endif %}>Enviar a caja</button></aside></section>
 
 {% if requiere_caja %}
 <div id="cashOpenModal" class="modal {% if not caja_abierta %}is-open{% endif %}" aria-hidden="true"><div class="modal__backdrop" data-close-modal></div><section class="modal__content" role="dialog" aria-modal="true"><header class="modal__header"><div><p class="eyebrow">Apertura de caja</p><h2>Iniciar caja del día</h2></div><button class="icon-btn" type="button" data-close-modal {% if not caja_abierta %}hidden{% endif %}>×</button></header><form class="form-stack" method="post" action="{{ url_for('sales.abrir_caja') }}"><div class="grid-two"><label>Monto inicial efectivo <input type="number" step="0.01" min="0" name="monto_inicial_efectivo" value="0" required></label><label>Monto inicial QR <input type="number" step="0.01" min="0" name="monto_inicial_qr" value="0" required></label></div><label>Observación <input name="observacion" placeholder="Opcional"></label><button class="btn btn--primary" type="submit">Abrir caja y vender</button></form></section></div>
-{% if caja_abierta %}
-<div id="cashCloseModal" class="modal" aria-hidden="true">
-    <div class="modal__backdrop" data-close-modal></div>
-    <section class="modal__content" role="dialog" aria-modal="true">
-        <header class="modal__header"><div><p class="eyebrow">Cierre de caja</p><h2>Cerrar caja</h2></div><button class="icon-btn" type="button" data-close-modal>×</button></header>
-        <div class="checkout-preview">
-            <div class="checkout-row"><span>Inicial efectivo</span><strong id="cashCloseInitialCash">Bs {{ '%.2f'|format(caja.session.monto_inicial_efectivo) }}</strong></div>
-            <div class="checkout-row"><span>Ventas efectivo</span><strong id="cashCloseSalesCash">Bs {{ '%.2f'|format(caja.ventas_efectivo) }}</strong></div>
-            <div class="checkout-row"><span>Esperado efectivo</span><strong id="cashCloseExpectedCash">Bs {{ '%.2f'|format(caja.esperado_efectivo) }}</strong></div>
-            <hr>
-            <div class="checkout-row"><span>Inicial QR</span><strong id="cashCloseInitialQr">Bs {{ '%.2f'|format(caja.session.monto_inicial_qr) }}</strong></div>
-            <div class="checkout-row"><span>Ventas QR</span><strong id="cashCloseSalesQr">Bs {{ '%.2f'|format(caja.ventas_qr) }}</strong></div>
-            <div class="checkout-row"><span>Esperado QR</span><strong id="cashCloseExpectedQr">Bs {{ '%.2f'|format(caja.esperado_qr) }}</strong></div>
-        </div>
-        <form class="form-stack" method="post" action="{{ url_for('sales.cerrar_caja') }}" id="cashCloseForm" data-expected-cash="{{ '%.2f'|format(caja.esperado_efectivo) }}" data-expected-qr="{{ '%.2f'|format(caja.esperado_qr) }}">
-            <p class="page-note">Los montos finales son editables. Si no coinciden con el esperado, el sistema guardará la diferencia positiva o negativa.</p>
-            <div class="grid-two"><label>Monto final efectivo <input id="cashFinalCash" type="number" step="0.01" min="0" name="monto_final_efectivo" value="{{ '%.2f'|format(caja.esperado_efectivo) }}" required></label><label>Monto final QR <input id="cashFinalQr" type="number" step="0.01" min="0" name="monto_final_qr" value="{{ '%.2f'|format(caja.esperado_qr) }}" required></label></div>
-            <div class="checkout-preview"><div class="checkout-row"><span>Diferencia efectivo</span><strong id="cashDiffCash">Bs 0.00</strong></div><div class="checkout-row"><span>Diferencia QR</span><strong id="cashDiffQr">Bs 0.00</strong></div><div class="checkout-row"><span>Diferencia total</span><strong id="cashDiffTotal">Bs 0.00</strong></div></div>
-            <label>Observación <input name="observacion" placeholder="Opcional"></label><button class="btn btn--primary" type="submit">Cerrar caja</button>
-        </form>
-    </section>
-</div>
-{% endif %}
+{% if caja_abierta %}<div id="cashCloseModal" class="modal" aria-hidden="true"><div class="modal__backdrop" data-close-modal></div><section class="modal__content" role="dialog" aria-modal="true"><header class="modal__header"><div><p class="eyebrow">Cierre de caja</p><h2>Cerrar caja</h2></div><button class="icon-btn" type="button" data-close-modal>×</button></header><div class="checkout-preview"><div class="checkout-row"><span>Inicial efectivo</span><strong id="cashCloseInitialCash">Bs {{ '%.2f'|format(caja.session.monto_inicial_efectivo) }}</strong></div><div class="checkout-row"><span>Ventas efectivo</span><strong id="cashCloseSalesCash">Bs {{ '%.2f'|format(caja.ventas_efectivo) }}</strong></div><div class="checkout-row"><span>Esperado efectivo</span><strong id="cashCloseExpectedCash">Bs {{ '%.2f'|format(caja.esperado_efectivo) }}</strong></div><hr><div class="checkout-row"><span>Inicial QR</span><strong id="cashCloseInitialQr">Bs {{ '%.2f'|format(caja.session.monto_inicial_qr) }}</strong></div><div class="checkout-row"><span>Ventas QR</span><strong id="cashCloseSalesQr">Bs {{ '%.2f'|format(caja.ventas_qr) }}</strong></div><div class="checkout-row"><span>Esperado QR</span><strong id="cashCloseExpectedQr">Bs {{ '%.2f'|format(caja.esperado_qr) }}</strong></div></div><form class="form-stack" method="post" action="{{ url_for('sales.cerrar_caja') }}" id="cashCloseForm" data-expected-cash="{{ '%.2f'|format(caja.esperado_efectivo) }}" data-expected-qr="{{ '%.2f'|format(caja.esperado_qr) }}"><p class="page-note">Los montos finales son editables. Si no coinciden con el esperado, el sistema guardará la diferencia positiva o negativa.</p><div class="grid-two"><label>Monto final efectivo <input id="cashFinalCash" type="number" step="0.01" min="0" name="monto_final_efectivo" value="{{ '%.2f'|format(caja.esperado_efectivo) }}" required></label><label>Monto final QR <input id="cashFinalQr" type="number" step="0.01" min="0" name="monto_final_qr" value="{{ '%.2f'|format(caja.esperado_qr) }}" required></label></div><div class="checkout-preview"><div class="checkout-row"><span>Diferencia efectivo</span><strong id="cashDiffCash">Bs 0.00</strong></div><div class="checkout-row"><span>Diferencia QR</span><strong id="cashDiffQr">Bs 0.00</strong></div><div class="checkout-row"><span>Diferencia total</span><strong id="cashDiffTotal">Bs 0.00</strong></div></div><label>Observación <input name="observacion" placeholder="Opcional"></label><button class="btn btn--primary" type="submit">Cerrar caja</button></form></section></div>{% endif %}
 {% endif %}
 
-<div id="checkoutModal" class="modal" aria-hidden="true">
-    <div class="modal__backdrop" data-close-modal></div>
-    <section class="modal__content" role="dialog" aria-modal="true" aria-labelledby="checkoutTitle">
-        <header class="modal__header"><div><p class="eyebrow">Vista preliminar</p><h2 id="checkoutTitle">Confirmar venta</h2></div><button class="icon-btn" type="button" data-close-modal>×</button></header>
-        <div id="checkoutPreview" class="checkout-preview"></div>
-        <div class="seller-chip-box" id="sellerChipBox" style="margin:10px 0 8px">
-            <small style="display:block;margin-bottom:6px;color:var(--muted)">Vendedor</small>
-            <div style="display:flex;gap:6px;flex-wrap:wrap">
-                <button class="seller-chip" type="button" data-seller-chip="" data-seller-name="Sin vendedor" style="border:1px solid var(--border);background:transparent;border-radius:999px;padding:5px 10px;font-size:12px;line-height:1">Sin vendedor</button>
-                {% for seller in sellers %}
-                <button class="seller-chip" type="button" data-seller-chip="{{ seller.id }}" data-seller-name="{{ seller.nombre_visible }}" style="border:1px solid var(--border);background:transparent;border-radius:999px;padding:5px 10px;font-size:12px;line-height:1">{{ seller.nombre_visible }}</button>
-                {% endfor %}
-            </div>
-        </div>
-        <div class="choice-group" data-choice-group="payment"><button type="button" data-value="EFECTIVO">Efectivo</button><button type="button" data-value="QR">QR</button><button type="button" data-value="TARJETA">Tarjeta</button><button type="button" data-value="TRANSFERENCIA">Transferencia</button></div>
-        <footer class="modal__footer"><button class="btn btn--ghost" type="button" data-close-modal>Cancelar</button><button id="confirmSaleBtn" class="btn btn--primary" type="button">Confirmar pago</button></footer>
-        <div id="saleResult" class="sale-result" hidden></div>
-    </section>
-</div>
+<div id="checkoutModal" class="modal" aria-hidden="true"><div class="modal__backdrop" data-close-modal></div><section class="modal__content" role="dialog" aria-modal="true" aria-labelledby="checkoutTitle"><header class="modal__header"><div><p class="eyebrow">Vista preliminar</p><h2 id="checkoutTitle">Confirmar venta</h2></div><button class="icon-btn" type="button" data-close-modal>×</button></header><div id="checkoutPreview" class="checkout-preview"></div><div class="seller-chip-box" id="sellerChipBox" style="margin:10px 0 8px"><small style="display:block;margin-bottom:6px;color:var(--muted)">Vendedor</small><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="seller-chip" type="button" data-seller-chip="" data-seller-name="Sin vendedor" style="border:1px solid var(--border);background:transparent;border-radius:999px;padding:5px 10px;font-size:12px;line-height:1">Sin vendedor</button>{% for seller in sellers %}<button class="seller-chip" type="button" data-seller-chip="{{ seller.id }}" data-seller-name="{{ seller.nombre_visible }}" style="border:1px solid var(--border);background:transparent;border-radius:999px;padding:5px 10px;font-size:12px;line-height:1">{{ seller.nombre_visible }}</button>{% endfor %}</div></div><div class="choice-group" data-choice-group="payment"><button type="button" data-value="EFECTIVO">Efectivo</button><button type="button" data-value="QR">QR</button><button type="button" data-value="TARJETA">Tarjeta</button><button type="button" data-value="TRANSFERENCIA">Transferencia</button></div><section class="panel" style="margin:12px 0;padding:12px"><h3 style="margin:0 0 8px">Datos del cliente</h3><div class="grid-two"><label>Nombre y apellido <input id="clientName" autocomplete="off"></label><label>Número de celular <input id="clientPhone" inputmode="tel" autocomplete="off"></label></div><label>Carnet <input id="clientDocument" autocomplete="off" placeholder="Para ganar puntos, registrar"></label><div class="choice-group" style="margin:8px 0"><label><input type="radio" name="tipo_entrega" value="TIENDA" checked> Entrega en tienda</label><label><input type="radio" name="tipo_entrega" value="ENVIO"> Envío</label></div><div id="shippingFields" hidden><div class="grid-two"><label>Ciudad destino <select id="clientCity"><option value="">Seleccionar</option><option>La Paz</option><option>Oruro</option><option>Potosi</option><option>Cochabamba</option><option>Chuquisaca</option><option>Tarija</option><option>Pando</option><option>Beni</option><option>Santa Cruz</option></select></label><label>Detalle / provincia <input id="shippingDetail" placeholder="Provincia, zona o referencia"></label></div></div></section><footer class="modal__footer"><button class="btn btn--ghost" type="button" data-close-modal>Cancelar</button><button id="confirmSaleBtn" class="btn btn--primary" type="button">Confirmar pago</button></footer><div id="saleResult" class="sale-result" hidden></div></section></div>
 {% endblock %}
 {% block scripts %}<script>
-function bindCashCloseDifference(){
-  const form=document.getElementById('cashCloseForm');
-  if(!form)return;
-  const expectedCash=Number(form.dataset.expectedCash||0);
-  const expectedQr=Number(form.dataset.expectedQr||0);
-  const cash=document.getElementById('cashFinalCash');
-  const qr=document.getElementById('cashFinalQr');
-  const diffCash=document.getElementById('cashDiffCash');
-  const diffQr=document.getElementById('cashDiffQr');
-  const diffTotal=document.getElementById('cashDiffTotal');
-  const fmt=value=>`Bs ${Number(value||0).toFixed(2)}`;
-  const render=()=>{
-    const dc=Number(cash?.value||0)-expectedCash;
-    const dq=Number(qr?.value||0)-expectedQr;
-    if(diffCash)diffCash.textContent=fmt(dc);
-    if(diffQr)diffQr.textContent=fmt(dq);
-    if(diffTotal)diffTotal.textContent=fmt(dc+dq);
-  };
-  cash?.removeEventListener?.('input',cash.__cashDiffRender||(()=>{}));
-  qr?.removeEventListener?.('input',qr.__cashDiffRender||(()=>{}));
-  cash&&(cash.__cashDiffRender=render);
-  qr&&(qr.__cashDiffRender=render);
-  cash?.addEventListener('input',render);
-  qr?.addEventListener('input',render);
-  render();
-}
-document.addEventListener('DOMContentLoaded',bindCashCloseDifference);
-</script><script src="{{ url_for('static', filename='js/sales.js') }}?v=20260626-1"></script>{% endblock %}
+function bindCashCloseDifference(){const form=document.getElementById('cashCloseForm');if(!form)return;const expectedCash=Number(form.dataset.expectedCash||0);const expectedQr=Number(form.dataset.expectedQr||0);const cash=document.getElementById('cashFinalCash');const qr=document.getElementById('cashFinalQr');const diffCash=document.getElementById('cashDiffCash');const diffQr=document.getElementById('cashDiffQr');const diffTotal=document.getElementById('cashDiffTotal');const fmt=value=>`Bs ${Number(value||0).toFixed(2)}`;const render=()=>{const dc=Number(cash?.value||0)-expectedCash;const dq=Number(qr?.value||0)-expectedQr;if(diffCash)diffCash.textContent=fmt(dc);if(diffQr)diffQr.textContent=fmt(dq);if(diffTotal)diffTotal.textContent=fmt(dc+dq)};cash?.removeEventListener?.('input',cash.__cashDiffRender||(()=>{}));qr?.removeEventListener?.('input',qr.__cashDiffRender||(()=>{}));cash&&(cash.__cashDiffRender=render);qr&&(qr.__cashDiffRender=render);cash?.addEventListener('input',render);qr?.addEventListener('input',render);render()}document.addEventListener('DOMContentLoaded',bindCashCloseDifference);
+</script><script src="{{ url_for('static', filename='js/sales.js') }}?v=20260626-3"></script>{% endblock %}
